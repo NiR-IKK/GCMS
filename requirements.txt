@@ -1,0 +1,16 @@
+# Runtime requirements for PyRecycle-Analytics.
+# Canonical dependency declaration lives in pyproject.toml; this file exists for
+# environments that cannot install the project itself (e.g. bare CI containers).
+
+numpy>=1.26
+scipy>=1.11
+scikit-learn>=1.4
+pydantic>=2.6
+
+# Raw-data ingestion (mzML / mzXML / mzData). ANDI-MS (.CDF) is handled through
+# scipy.io.netcdf_file, so no netCDF4 / vendor SDK is required.
+pyopenms>=3.0
+
+# Test tooling
+pytest>=8.0
+pytest-cov>=5.0

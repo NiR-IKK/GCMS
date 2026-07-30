@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Local data (raw chromatograms are large and instrument-specific)
+data/raw/
+data/interim/
+data/processed/
+*.mzML
+*.mzXML
+*.CDF
+*.cdf
+!tests/fixtures/**/*.mzML
+!tests/fixtures/**/*.cdf
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
