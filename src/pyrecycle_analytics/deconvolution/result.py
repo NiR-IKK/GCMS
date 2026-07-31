@@ -151,6 +151,44 @@ class ResolutionResult:
             diagnostics=dict(self.diagnostics),
         )
 
+    def drop_negligible_of_total(self, min_area_fraction: float) -> ResolutionResult:
+        """Remove components below a share of the run's *total* resolved area.
+
+        Distinct from :meth:`drop_negligible`, which compares against the largest
+        single component. When per-window results are stitched together, a
+        component that dominates an otherwise empty window looks large by that
+        measure but is still noise. Judging it against the whole run is what
+        catches it.
+
+        Args:
+            min_area_fraction: Threshold relative to the summed area of all
+                components. Zero disables the filter.
+
+        Returns:
+            A copy without the negligible components; never empty.
+        """
+        if min_area_fraction <= 0.0:
+            return self
+        areas = self.areas
+        total = float(np.sum(areas))
+        if total <= 0.0:
+            return self
+        keep = np.flatnonzero(areas >= min_area_fraction * total)
+        if keep.size == 0:
+            keep = np.array([int(np.argmax(areas))])
+        return ResolutionResult(
+            retention_times=self.retention_times.copy(),
+            mz_axis=self.mz_axis.copy(),
+            C=self.C[:, keep].copy(),
+            S=self.S[keep, :].copy(),
+            lack_of_fit=self.lack_of_fit,
+            explained_variance=self.explained_variance,
+            n_iterations=self.n_iterations,
+            converged=self.converged,
+            method=self.method,
+            diagnostics=dict(self.diagnostics),
+        )
+
     def __repr__(self) -> str:
         return (
             f"ResolutionResult(method={self.method!r}, components={self.n_components}, "

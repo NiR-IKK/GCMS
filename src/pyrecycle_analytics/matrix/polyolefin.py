@@ -174,6 +174,7 @@ def detect_homologue_comb(
     spacing_tolerance: float = 0.45,
     max_spacing_variation: float = 0.12,
     min_clusters: int = 5,
+    sub_clusters: int = 3,
     contamination_excess_sigmas: float = 4.0,
 ) -> CombDetection:
     """Locate the homologous-series clusters and flag the contaminated ones.
@@ -192,6 +193,10 @@ def detect_homologue_comb(
             analyte signal.
         min_clusters: Minimum number of members. A polyolefin comb spans many
             carbon numbers, so a handful of peaks is not enough evidence.
+        sub_clusters: Segments per cluster, each modelled with its own spectrum.
+            A cluster is a fused diene/alkene/alkane triplet whose spectrum
+            changes across it; one averaged spectrum leaves a remnant that buries
+            small markers.
         contamination_excess_sigmas: How far above the neighbouring clusters a
             channel must stand to be treated as a co-eluting foreign compound.
 
@@ -273,8 +278,17 @@ def detect_homologue_comb(
         )
     ).astype(int)
 
-    spectra = _cluster_spectra(cube, boundaries)
-    _, contaminated = _repair_spectra(spectra, excess_sigmas=contamination_excess_sigmas)
+    segment_edges = _segment_edges(boundaries, sub_clusters)
+    segment_spectra = _cluster_spectra(cube, segment_edges)
+    _, segment_flags = _repair_spectra(
+        segment_spectra, stride=sub_clusters, excess_sigmas=contamination_excess_sigmas
+    )
+    # Report contamination per cluster: a cluster counts as contaminated when any
+    # of its segments does.
+    contaminated = np.zeros(boundaries.size - 1, dtype=bool)
+    for position, flagged in enumerate(segment_flags):
+        cluster = min(position // sub_clusters, contaminated.size - 1)
+        contaminated[cluster] |= bool(flagged)
 
     return CombDetection(
         apex_indices=apexes.astype(int),
@@ -286,11 +300,37 @@ def detect_homologue_comb(
     )
 
 
+def _segment_edges(boundaries: np.ndarray, sub_clusters: int) -> np.ndarray:
+    """Split every cluster into ``sub_clusters`` equal slices along the scan axis.
+
+    One spectrum per cluster is not enough. A cluster is a fused triplet — the
+    alkadiene elutes first, then the 1-alkene, then the n-alkane — and those three
+    have visibly different spectra. Describing the whole cluster with a single
+    averaged spectrum leaves systematic structure behind, and that remnant is what
+    swamps the small markers: measured before this change, the recovered
+    caprolactam spectrum carried m/z 43 and 57 from leftover comb and reached a
+    similarity of only 0.71, while naphthalene disappeared into the remnant
+    entirely.
+    """
+    edges: list[int] = []
+    for index in range(boundaries.size - 1):
+        start, stop = int(boundaries[index]), int(boundaries[index + 1])
+        if stop - start < sub_clusters:
+            edges.append(start)
+            continue
+        edges.extend(
+            int(round(position))
+            for position in np.linspace(start, stop, sub_clusters + 1)[:-1]
+        )
+    edges.append(int(boundaries[-1]))
+    return np.unique(np.asarray(edges, dtype=int))
+
+
 def _cluster_spectra(cube: PyrogramDataCube, boundaries: np.ndarray) -> np.ndarray:
-    """Area-summed spectrum of each cluster, rows normalised to sum one."""
-    n_clusters = boundaries.size - 1
-    spectra = np.zeros((n_clusters, cube.n_mz), dtype=np.float64)
-    for index in range(n_clusters):
+    """Area-summed spectrum of each segment, rows normalised to sum one."""
+    n_segments = boundaries.size - 1
+    spectra = np.zeros((n_segments, cube.n_mz), dtype=np.float64)
+    for index in range(n_segments):
         start, stop = int(boundaries[index]), int(boundaries[index + 1])
         if stop <= start:
             continue
@@ -304,6 +344,7 @@ def _cluster_spectra(cube: PyrogramDataCube, boundaries: np.ndarray) -> np.ndarr
 def _repair_spectra(
     spectra: np.ndarray,
     *,
+    stride: int = 1,
     neighbourhood: int = 2,
     excess_sigmas: float = 4.0,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -325,7 +366,13 @@ def _repair_spectra(
     are repaired — a deficit is ordinary variation along the series.
 
     Args:
-        spectra: Measured cluster spectra, shape ``(n_clusters, n_mz)``.
+        spectra: Measured segment spectra, shape ``(n_segments, n_mz)``.
+        stride: Number of segments per cluster. Comparison runs along the carbon
+            axis at constant position within the cluster — segment ``j`` of one
+            cluster against segment ``j`` of its neighbours. Comparing adjacent
+            *segments* would be wrong: within one cluster they are the diene, the
+            alkene and the alkane, which genuinely differ, and every one of them
+            would be flagged as contaminated.
         neighbourhood: How many clusters on each side form the reference.
         excess_sigmas: How far above the neighbourhood's robust spread a channel
             must lie to count as foreign.
@@ -334,18 +381,17 @@ def _repair_spectra(
         ``(repaired_spectra, contaminated_mask)``.
     """
     repaired = spectra.copy()
-    n_clusters = spectra.shape[0]
-    contaminated = np.zeros(n_clusters, dtype=bool)
-    if n_clusters < 3:
+    n_segments = spectra.shape[0]
+    contaminated = np.zeros(n_segments, dtype=bool)
+    stride = max(int(stride), 1)
+    if n_segments < 3 * stride:
         return repaired, contaminated
 
-    for index in range(n_clusters):
+    for index in range(n_segments):
         neighbours = [
-            other
-            for other in range(
-                max(0, index - neighbourhood), min(n_clusters, index + neighbourhood + 1)
-            )
-            if other != index
+            index + offset * stride
+            for offset in range(-neighbourhood, neighbourhood + 1)
+            if offset != 0 and 0 <= index + offset * stride < n_segments
         ]
         if len(neighbours) < 2:
             continue
@@ -385,10 +431,16 @@ def _cluster_profiles(
         start, stop = int(boundaries[index]), int(boundaries[index + 1])
         if stop <= start:
             continue
-        segment = np.clip(indicator[start:stop], 0.0, None)
-        area = np.trapezoid(segment, retention_times[start:stop])
+        profiles[start:stop, index] = np.clip(indicator[start:stop], 0.0, None)
+        # Über die volle Zeitachse normieren, nicht nur über das Segment: das
+        # Profil ist außerhalb null, und die Trapezregel zählt an den
+        # Segmenträndern halbe Trapeze gegen null mit. Bei schmalen Segmenten war
+        # der Unterschied bis zu 20 %.
+        area = float(np.trapezoid(profiles[:, index], retention_times))
         if area > 0.0:
-            profiles[start:stop, index] = segment / area
+            profiles[:, index] /= area
+        else:
+            profiles[:, index] = 0.0
     return profiles
 
 
@@ -437,6 +489,7 @@ def build_matrix_model(
     detection: CombDetection,
     *,
     matrix_type: str = "PE_PP_Backbone",
+    sub_clusters: int = 3,
     repair_contaminated: bool = True,
 ) -> PolyolefinMatrixModel:
     """Fit the comb model to a pyrogram.
@@ -445,6 +498,7 @@ def build_matrix_model(
         cube: Baseline-corrected pyrogram.
         detection: Output of :func:`detect_homologue_comb`.
         matrix_type: Indicator ion set, used for the profile shapes.
+        sub_clusters: Segments per cluster; must match the value used for detection.
         repair_contaminated: Replace contaminated cluster spectra with
             interpolated ones. Switching this off subtracts the co-eluting
             analytes along with the matrix and is only useful for demonstrating
@@ -454,10 +508,11 @@ def build_matrix_model(
         The fitted model.
     """
     indicator = _indicator_chromatogram(cube, MATRIX_INDICATOR_IONS[matrix_type])
-    profiles = _cluster_profiles(indicator, detection.boundaries, cube.retention_times)
-    spectra = _cluster_spectra(cube, detection.boundaries)
+    edges = _segment_edges(detection.boundaries, sub_clusters)
+    profiles = _cluster_profiles(indicator, edges, cube.retention_times)
+    spectra = _cluster_spectra(cube, edges)
     if repair_contaminated:
-        spectra, _ = _repair_spectra(spectra)
+        spectra, _ = _repair_spectra(spectra, stride=sub_clusters)
 
     amplitudes = _fit_amplitudes(cube.intensities, profiles, spectra)
     return PolyolefinMatrixModel(
@@ -475,6 +530,7 @@ def subtract_polymer_matrix(
     min_prominence_fraction: float = 0.02,
     max_spacing_variation: float = 0.12,
     min_clusters: int = 5,
+    sub_clusters: int = 3,
     contamination_excess_sigmas: float = 4.0,
     repair_contaminated: bool = True,
     clip_negative: bool = True,
@@ -491,6 +547,7 @@ def subtract_polymer_matrix(
         max_spacing_variation: Regularity requirement on the series; see
             :func:`detect_homologue_comb`.
         min_clusters: Minimum number of series members required.
+        sub_clusters: Segments per cluster, each with its own measured spectrum.
         contamination_excess_sigmas: How far above the neighbouring clusters a
             channel must stand to be treated as a co-eluting foreign compound.
         repair_contaminated: Interpolate contaminated cluster spectra from clean
@@ -511,10 +568,15 @@ def subtract_polymer_matrix(
         min_prominence_fraction=min_prominence_fraction,
         max_spacing_variation=max_spacing_variation,
         min_clusters=min_clusters,
+        sub_clusters=sub_clusters,
         contamination_excess_sigmas=contamination_excess_sigmas,
     )
     model = build_matrix_model(
-        cube, detection, matrix_type=matrix_type, repair_contaminated=repair_contaminated
+        cube,
+        detection,
+        matrix_type=matrix_type,
+        sub_clusters=sub_clusters,
+        repair_contaminated=repair_contaminated,
     )
 
     modelled = model.reconstruct()
