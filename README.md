@@ -5,9 +5,43 @@ Py-GC/MS-Auswerteplattform für die **inverse Polymeranalytik** von Post-Consume
 Ziel ist nicht generische Chromatographie-Software, sondern der Rückschluss von überlappenden
 Pyrolysaten auf polymere Hauptkomponenten, Additive und Degradationsgrade.
 
-> **Status: Meilenstein 1 abgeschlossen.** Ingestion-Layer, Datenmodell, Preprocessing und der
-> synthetische Pyrogramm-Generator stehen; 612 Tests laufen grün. Meilenstein 2 (MCR-ALS &
-> Matrix-Subtraktion) setzt direkt auf dem hier erzeugten Ground Truth auf.
+> **Status: Meilenstein 1 abgeschlossen.** Ingestion-Layer, Datenmodell, Preprocessing, Streamlit-
+> Oberfläche und der synthetische Pyrogramm-Generator stehen; 632 Tests laufen grün. Meilenstein 2
+> (MCR-ALS & Matrix-Subtraktion) setzt direkt auf dem hier erzeugten Ground Truth auf.
+
+---
+
+## 0. Eigene Messungen auswerten
+
+Die simulierten Proben sind **Prüfmittel, nicht das Produkt**. Der Ingestion-Layer ist für echte
+Messdateien gebaut; der Generator liegt bewusst in `tests/`, weil ohne ihn keine Deconvolution
+automatisiert prüfbar wäre.
+
+```bash
+pip install -e '.[io,ui]'
+streamlit run streamlit_app.py     # links "Eigene Messung hochladen"
+```
+
+Oder direkt aus Python:
+
+```python
+from pyrecycle_analytics.ingestion import read_pyrogram
+
+cube = read_pyrogram("Probe_4711.CDF")
+```
+
+**Welches Exportformat?** `.CDF` (ANDI-MS / AIA netCDF) exportiert jedes gängige GC/MS — bei
+Agilent ChemStation und MassHunter sowie bei Shimadzu GCMSsolution heißt der Menüpunkt *AIA*- oder
+*ANDI*-Export. Alternativ `.mzML` oder `.mzXML`, etwa über msConvert. Achtung: ein
+netCDF-**4**/HDF5-Container mit `.cdf`-Endung ist kein ANDI-MS; die Software sagt das mit
+Lösungshinweis, statt kryptisch abzustürzen.
+
+**Was mit echten Daten heute schon geht:** Import mit Provenienz und Reader-Warnungen, TIC,
+Ionenspuren, Massenspektren mit Untergrundabzug, Baseline-Korrektur, Glättung, Export.
+
+**Was noch nicht geht:** Deconvolution, Matrix-Subtraktion, Polymer-Identifikation,
+Degradations-Index, Rezyklat-Pass. Das sind die Meilensteine 2 bis 4 — bis dahin ist die
+Ionenspur-Ansicht ein Sichtwerkzeug und ausdrücklich keine Auswertung.
 
 ---
 
@@ -83,10 +117,12 @@ src/pyrecycle_analytics/
 │   └── pipeline.py              Deklarative, reproduzierbare Preprocessing-Kette
 └── exceptions.py
 
+streamlit_app.py                 Oberfläche: Upload, Sichtung, Vorverarbeitung, Export
+
 tests/
 ├── synthetic_data.py            SyntheticPyrogramGenerator (TDD-Basis)
 ├── reference_spectra.py         EI-Spektren und Retentionsanker der Marker
-└── test_*.py                    612 Tests
+└── test_*.py                    632 Tests
 ```
 
 ---
@@ -95,8 +131,9 @@ tests/
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[io,dev]'      # io = pyopenms für die XML-Formate
-pytest                          # 612 Tests, ca. 25 s
+pip install -e '.[io,ui,dev]'   # io = pyopenms (mzML/mzXML), ui = Streamlit + Plotly
+pytest                          # 632 Tests, ca. 25 s
+streamlit run streamlit_app.py
 ```
 
 Ohne `pyopenms` bleibt alles außer dem mzML/mzXML/mzData-Reader nutzbar; die entsprechenden
@@ -120,6 +157,23 @@ cube.eic(105.0)             # Extracted-Ion-Chromatogramm (PET-Marker Benzoesäu
 cube.eic_sum([104, 103, 78])# summierte Diagnoseionen (Styrol)
 cube.window(640.0, 700.0)   # lokales Fenster für die Kurvenauflösung
 cube.metadata.reader_warnings
+```
+
+Das Retentionsfenster akzeptiert beide Schreibweisen — positional oder als Tupel, analog zu
+`mz_range`; ohne Angabe bleiben alle Scans erhalten:
+
+```python
+cube.window(640.0, 700.0, mz_range=(50.0, 300.0))
+cube.window(rt_range_s=(640.0, 700.0), mz_range=(50.0, 300.0))
+cube.window(mz_range=(50.0, 300.0))
+```
+
+Uploads liegen als Bytes vor, nicht als Pfad — beide Parser brauchen aber eine echte Datei:
+
+```python
+from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+cube = read_pyrogram_bytes(upload.getvalue(), upload.name)
 ```
 
 Das Format wird über Magic Bytes erkannt, nicht über die Endung: eine als `.mzML` benannte
@@ -186,7 +240,7 @@ pytest --cov=src/pyrecycle_analytics --cov=data_schemas
 ruff check . && mypy        # Lint und Typprüfung: sauber
 ```
 
-612 Tests, 96 % Abdeckung. Die Tests prüfen zwei Ebenen:
+632 Tests, 96 % Abdeckung. Die Tests prüfen zwei Ebenen:
 
 * **Mathematischer Vertrag** — exakte Bilinearität, Flächen­normierung der EMG über den gesamten
   Tailing-Bereich, L1-normierte Spektren, prozessübergreifende Reproduzierbarkeit,

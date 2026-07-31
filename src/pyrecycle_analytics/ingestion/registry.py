@@ -9,17 +9,25 @@ inconclusive.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from data_schemas.enums import SourceFormat
 from pyrecycle_analytics.core.datacube import PyrogramDataCube
 from pyrecycle_analytics.exceptions import UnsupportedFormatError
 from pyrecycle_analytics.ingestion.andi_cdf import read_andi_cdf
-from pyrecycle_analytics.ingestion.common import IngestOptions
+from pyrecycle_analytics.ingestion.common import IngestOptions, default_sample_metadata
 from pyrecycle_analytics.ingestion.mzml import read_mzdata, read_mzml, read_mzxml
 
-__all__ = ["detect_format", "read_pyrogram", "READERS", "SUPPORTED_EXTENSIONS"]
+__all__ = [
+    "detect_format",
+    "read_pyrogram",
+    "read_pyrogram_bytes",
+    "READERS",
+    "SUPPORTED_EXTENSIONS",
+]
 
 READERS: dict[SourceFormat, Callable[[Path, IngestOptions], PyrogramDataCube]] = {
     SourceFormat.MZML: read_mzml,
@@ -143,3 +151,62 @@ def read_pyrogram(
     if reader is None:  # pragma: no cover - defensive; READERS covers the enum
         raise UnsupportedFormatError(f"no reader registered for {source_format}")
     return reader(path, options)
+
+
+def read_pyrogram_bytes(
+    data: bytes,
+    filename: str,
+    options: IngestOptions | None = None,
+    **option_overrides: object,
+) -> PyrogramDataCube:
+    """Read raw data that is already in memory rather than on disk.
+
+    Both parsers need a real file: ``scipy.io.netcdf_file`` and the OpenMS handlers
+    take paths, not streams. This helper bridges the gap for callers that receive
+    uploads — a Streamlit ``file_uploader``, or the reporting API's upload endpoint
+    — by staging the bytes in a temporary file and cleaning it up afterwards.
+
+    The resulting metadata records ``filename`` as the source path (not the
+    throwaway temporary one), and the checksum covers the uploaded bytes, so an
+    uploaded sample is exactly as traceable as one read from disk.
+
+    Args:
+        data: Complete file contents.
+        filename: Original file name. Its extension is preserved so that format
+            detection can fall back to it when the content is inconclusive.
+        options: Full reader configuration.
+        **option_overrides: Individual :class:`IngestOptions` fields, as in
+            :func:`read_pyrogram`.
+
+    Returns:
+        A validated data cube whose ``metadata.source_path`` is ``filename``.
+
+    Raises:
+        ValueError: If ``data`` is empty.
+        UnsupportedFormatError: If the format cannot be identified.
+        CorruptRawDataError: If the file is structurally invalid.
+        MissingDependencyError: If an XML format is requested without pyopenms.
+    """
+    if not data:
+        raise ValueError(f"{filename!r} is empty; nothing to read")
+
+    # Without this the sample id would default to the temporary file's stem
+    # ("upload") instead of the name the analyst recognises.
+    default_sample = default_sample_metadata(Path(filename))
+    if options is not None:
+        if options.sample is None:
+            options = replace(options, sample=default_sample)
+    elif "sample" not in option_overrides:
+        option_overrides = {**option_overrides, "sample": default_sample}
+
+    suffix = Path(filename).suffix or ".dat"
+    staged = Path(tempfile.mkdtemp(prefix="pyrecycle-upload-")) / f"upload{suffix}"
+    try:
+        staged.write_bytes(data)
+        cube = read_pyrogram(staged, options, **option_overrides)
+    finally:
+        staged.unlink(missing_ok=True)
+        staged.parent.rmdir()
+
+    cube.metadata = cube.metadata.model_copy(update={"source_path": Path(filename)})
+    return cube

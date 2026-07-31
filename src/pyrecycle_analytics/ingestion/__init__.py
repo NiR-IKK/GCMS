@@ -33,6 +33,7 @@ from pyrecycle_analytics.ingestion.registry import (
     SUPPORTED_EXTENSIONS,
     detect_format,
     read_pyrogram,
+    read_pyrogram_bytes,
 )
 from pyrecycle_analytics.ingestion.writers import write_andi_cdf, write_mzml
 
@@ -48,6 +49,7 @@ __all__ = [
     "read_mzml",
     "read_mzxml",
     "read_pyrogram",
+    "read_pyrogram_bytes",
     "sha256_of_file",
     "write_andi_cdf",
     "write_mzml",

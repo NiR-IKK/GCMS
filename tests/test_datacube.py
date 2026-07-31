@@ -233,6 +233,35 @@ class TestWindowing:
         window.intensities[0, 0] = 12345.0
         assert tiny_cube.intensities[1, 0] != 12345.0
 
+    def test_window_accepts_the_rt_range_tuple_form(
+        self, tiny_cube: PyrogramDataCube
+    ) -> None:
+        """``rt_range_s=(a, b)`` mirrors ``mz_range`` and must match the positional form."""
+        positional = tiny_cube.window(11.0, 13.0, mz_range=(41.0, 43.0))
+        tuple_form = tiny_cube.window(rt_range_s=(11.0, 13.0), mz_range=(41.0, 43.0))
+        assert np.array_equal(tuple_form.intensities, positional.intensities)
+        assert np.array_equal(tuple_form.retention_times, positional.retention_times)
+
+    def test_window_without_a_retention_range_keeps_every_scan(
+        self, tiny_cube: PyrogramDataCube
+    ) -> None:
+        """The convenient form when only the m/z axis is being restricted."""
+        result = tiny_cube.window(mz_range=(41.0, 43.0))
+        assert result.n_scans == tiny_cube.n_scans
+        assert result.n_mz == 3
+
+    def test_window_rejects_both_retention_forms_at_once(
+        self, tiny_cube: PyrogramDataCube
+    ) -> None:
+        with pytest.raises(ValueError, match="not both"):
+            tiny_cube.window(11.0, 13.0, rt_range_s=(11.0, 13.0))
+
+    def test_window_rejects_a_half_specified_retention_range(
+        self, tiny_cube: PyrogramDataCube
+    ) -> None:
+        with pytest.raises(ValueError, match="must be given together"):
+            tiny_cube.window(11.0)
+
     def test_window_rejects_an_mz_range_with_no_channels(
         self, tiny_cube: PyrogramDataCube
     ) -> None:

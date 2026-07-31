@@ -259,9 +259,10 @@ class PyrogramDataCube:
 
     def window(
         self,
-        rt_start_s: float,
-        rt_end_s: float,
+        rt_start_s: float | None = None,
+        rt_end_s: float | None = None,
         *,
+        rt_range_s: tuple[float, float] | None = None,
         mz_range: tuple[float, float] | None = None,
     ) -> PyrogramDataCube:
         """Cut a sub-cube out of the run.
@@ -270,17 +271,45 @@ class PyrogramDataCube:
         co-eluting peaks, never to the whole 60-minute run, so this is one of the
         most-used operations in the deconvolution engine.
 
+        The retention window may be given either as two positional bounds or as a
+        single ``rt_range_s`` tuple, mirroring ``mz_range``::
+
+            cube.window(640.0, 700.0, mz_range=(50.0, 300.0))
+            cube.window(rt_range_s=(640.0, 700.0), mz_range=(50.0, 300.0))
+
+        Omitting the retention window entirely keeps every scan, which is the
+        convenient form when only the m/z axis is being restricted.
+
         Args:
-            rt_start_s: Window start in seconds.
-            rt_end_s: Window end in seconds.
+            rt_start_s: Window start in seconds. Mutually exclusive with ``rt_range_s``.
+            rt_end_s: Window end in seconds. Mutually exclusive with ``rt_range_s``.
+            rt_range_s: Optional inclusive ``(rt_start_s, rt_end_s)`` tuple.
             mz_range: Optional inclusive ``(mz_low, mz_high)`` restriction.
 
         Returns:
             New cube sharing this cube's metadata with an added audit step.
 
         Raises:
-            ValueError: If the window does not intersect the run.
+            ValueError: If both forms of the retention window are supplied, if only
+                one of the two positional bounds is given, or if the window does not
+                intersect the run.
         """
+        if rt_range_s is not None:
+            if rt_start_s is not None or rt_end_s is not None:
+                raise ValueError(
+                    "pass the retention window either as rt_start_s/rt_end_s or as "
+                    "rt_range_s, not both"
+                )
+            rt_start_s, rt_end_s = rt_range_s
+        elif (rt_start_s is None) != (rt_end_s is None):
+            raise ValueError(
+                "rt_start_s and rt_end_s must be given together; pass neither to keep "
+                "the full run, or use rt_range_s=(start, end)"
+            )
+
+        if rt_start_s is None or rt_end_s is None:
+            rt_start_s, rt_end_s = self.rt_range_s
+
         start, stop = self.scan_range(rt_start_s, rt_end_s)
         if start >= stop:
             raise ValueError(f"window [{rt_start_s}, {rt_end_s}] s does not intersect the run")

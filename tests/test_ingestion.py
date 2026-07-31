@@ -730,6 +730,80 @@ class TestMalformedAndiFiles:
         assert any("contain no ions" in w for w in cube.metadata.reader_warnings)
 
 
+class TestInMemoryIngestion:
+    """Uploads arrive as bytes, not paths — the browser and API entry point."""
+
+    def test_bytes_are_read_exactly_like_a_file(
+        self, cdf_path: Path, small_io_sample: SyntheticPyrogram
+    ) -> None:
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        from_disk = read_pyrogram(cdf_path, mz_range=_full_range(small_io_sample))
+        from_memory = read_pyrogram_bytes(
+            cdf_path.read_bytes(),
+            "PCR_LDPE_batch7.CDF",
+            mz_range=_full_range(small_io_sample),
+        )
+        assert np.array_equal(from_memory.intensities, from_disk.intensities)
+        assert np.array_equal(from_memory.retention_times, from_disk.retention_times)
+
+    def test_original_filename_is_recorded_not_the_temporary_one(
+        self, cdf_path: Path
+    ) -> None:
+        """A staged temp path in the provenance would be useless for traceability."""
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        cube = read_pyrogram_bytes(cdf_path.read_bytes(), "PCR_LDPE_batch7.CDF")
+        assert cube.metadata.source_path == Path("PCR_LDPE_batch7.CDF")
+        assert cube.metadata.sample.sample_id == "PCR_LDPE_batch7"
+
+    def test_checksum_covers_the_uploaded_bytes(self, cdf_path: Path) -> None:
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        cube = read_pyrogram_bytes(cdf_path.read_bytes(), "upload.cdf")
+        assert cube.metadata.source_checksum == sha256_of_file(cdf_path)
+
+    def test_supplied_sample_metadata_wins(self, cdf_path: Path) -> None:
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        sample = SampleMetadata(sample_id="LIMS-4711", stream=RecyclateStream.PCR_PP)
+        cube = read_pyrogram_bytes(
+            cdf_path.read_bytes(), "ignored.cdf", options=IngestOptions(sample=sample)
+        )
+        assert cube.metadata.sample.sample_id == "LIMS-4711"
+
+    @requires_pyopenms
+    def test_mzml_bytes_are_supported_too(self, mzml_path: Path) -> None:
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        cube = read_pyrogram_bytes(mzml_path.read_bytes(), "run.mzML")
+        assert cube.metadata.source_format is SourceFormat.MZML
+
+    def test_empty_upload_is_rejected(self) -> None:
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        with pytest.raises(ValueError, match="is empty"):
+            read_pyrogram_bytes(b"", "nothing.cdf")
+
+    def test_unidentifiable_upload_is_rejected(self) -> None:
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        with pytest.raises(UnsupportedFormatError):
+            read_pyrogram_bytes(b"retention,area\n1,2\n", "results.csv")
+
+    def test_temporary_file_is_cleaned_up_even_on_failure(self) -> None:
+        """A staging directory left behind on every bad upload would fill the disk."""
+        import tempfile
+
+        from pyrecycle_analytics.ingestion import read_pyrogram_bytes
+
+        temp_root = Path(tempfile.gettempdir())
+        before = set(temp_root.glob("pyrecycle-upload-*"))
+        with pytest.raises(UnsupportedFormatError):
+            read_pyrogram_bytes(b"not a chromatogram", "junk.csv")
+        assert set(temp_root.glob("pyrecycle-upload-*")) == before
+
+
 class TestWriters:
     def test_extension_is_appended_when_missing(
         self, tmp_path: Path, small_io_sample: SyntheticPyrogram
