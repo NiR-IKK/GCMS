@@ -258,11 +258,15 @@ ihn aus den falschen Gründen bestehen. Mehrere Tests sichern deshalb explizit a
 
 ## 7. Nächste Meilensteine
 
-**MS2 — Deconvolution-Engine.** MCR-ALS über Fenster koeluierender Cluster (Initialisierung via
-SIMPLISMA/EFA, Nichtnegativität, Unimodalität), plus
-`subtract_polymer_matrix(raw_data, matrix_type="PE_PP_Backbone")`: Abzug der Alkan/Alken-
-Homologenreihen zum Freilegen der Spurenfragmente. Bewertung gegen `sample.C` / `sample.S` und
-gegen `truth.coeluting_groups()`; die Rezeptur `trace_pet_in_polyolefin` ist der Zielfall.
+Ausführliche Planung mit gemessenen Zielwerten, Akzeptanzkriterien und Risiken:
+**[ROADMAP.md](ROADMAP.md)**. Kurzfassung:
+
+**MS2 — Deconvolution-Engine.** Zuerst `subtract_polymer_matrix(...)` (Abzug der
+Alkan/Alken-Homologenreihen), **dann** MCR-ALS auf dem Residuum — nicht umgekehrt. Die Messung auf
+dem eigenen Benchmark zeigt, warum: die Subtraktion senkt die Zahl der Komponenten je
+koeluierendem Fenster von median 7 (max 12) auf median 3, und macht rund ein Drittel der Fenster
+ganz leer. Erst damit wird die Kurvenauflösung ein lösbares Problem. Bewertung gegen `sample.C` /
+`sample.S`; Zielfall ist `trace_pet_in_polyolefin`.
 
 **MS3 — Marker-Bibliothek & Degradations-Index.** Relationales Schema (SQLAlchemy) für
 quantitative Marker-Triaden; `DegradationEngine` auf Basis von iso-Alken/n-Alkan-Verhältnis und
