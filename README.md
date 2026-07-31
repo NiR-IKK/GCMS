@@ -8,7 +8,7 @@ Pyrolysaten auf polymere Hauptkomponenten, Additive und Degradationsgrade.
 > **Status: Meilensteine 1 bis 4 abgeschlossen.** Von der Rohdatei bis zum Rezyklat-Pass läuft die
 > Kette durch: Ingestion, Preprocessing, Matrix-Subtraktion, MCR-ALS, Marker-Bibliothek,
 > Identifikation, Degradations-Index, Pass als JSON/HTML/PDF und eine FastAPI-Schnittstelle.
-> 865 Tests laufen grün. Was die Kette auf dem eigenen Benchmark tatsächlich leistet — und wo sie
+> 877 Tests laufen grün. Was die Kette auf dem eigenen Benchmark tatsächlich leistet — und wo sie
 > ausdrücklich an ihre Grenzen kommt — steht gemessen in [Abschnitt 6](#6-was-die-kette-leistet-und-wo-sie-aufhört).
 > Offen bleibt bewusst nur MS2.4 (PARAFAC2-Mehrlaufauswertung), von Anfang an als optional geplant.
 
@@ -157,12 +157,13 @@ src/pyrecycle_analytics/
 ├── api/app.py                   FastAPI: Upload, Analyse-Job, Pass, Bibliothek
 └── exceptions.py
 
-streamlit_app.py                 Oberfläche: Upload, Sichtung, Vorverarbeitung, Export
+streamlit_app.py                 Oberfläche: Upload, Sichtung, Vorverarbeitung,
+                                 Auswertung bis zum Pass, Export
 
 tests/
 ├── synthetic_data.py            SyntheticPyrogramGenerator (TDD-Basis)
 ├── reference_spectra.py         EI-Spektren und Retentionsanker der Marker
-└── test_*.py                    865 Tests
+└── test_*.py                    877 Tests
 ```
 
 ---
@@ -172,7 +173,7 @@ tests/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[all]'         # oder gezielt: io, db, api, report, ui, dev
-pytest                          # 865 Tests, ca. 7 min
+pytest                          # 877 Tests, ca. 7 min
 streamlit run streamlit_app.py
 ```
 
@@ -439,7 +440,7 @@ pytest --cov=src/pyrecycle_analytics --cov=data_schemas
 ruff check . && mypy        # Lint und Typprüfung: sauber
 ```
 
-865 Tests. Sie prüfen drei Ebenen:
+877 Tests. Sie prüfen drei Ebenen:
 
 * **Mathematischer Vertrag** — exakte Bilinearität, Flächen­normierung der EMG über den gesamten
   Tailing-Bereich, L1-normierte Spektren, prozessübergreifende Reproduzierbarkeit,
@@ -487,7 +488,5 @@ Voraussetzung dafür steht im Generator bereit.
    wären der nächste Hebel.
 3. **Persistenz der Analysen** — Ergebnisse liegen im API-Prozess, ein Neustart verliert sie. Das
    Bibliotheksschema hat bereits die Tabellen dafür.
-4. **Streamlit-Oberfläche** — zeigt bislang Import, Sichtung und Vorverarbeitung; aufgelöste
-   Profile, Identifikationstabelle und Pass-Vorschau fehlen noch.
-5. **Echte Kalibrierung** — solange keine gravimetrischen Referenzmischungen unter derselben
+4. **Echte Kalibrierung** — solange keine gravimetrischen Referenzmischungen unter derselben
    Methode gemessen wurden, bleibt jeder Pass `response-corrected` und sagt das auch.

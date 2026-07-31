@@ -19,12 +19,15 @@ from pyrecycle_analytics.deconvolution.pipeline import (
     DeconvolutionConfig,
     resolve_pyrogram,
 )
+from pyrecycle_analytics.deconvolution.result import ResolutionResult
 from pyrecycle_analytics.degradation.engine import (
     DegradationIndices,
     compute_degradation_indices,
 )
 from pyrecycle_analytics.identification.engine import (
+    CompoundIdentification,
     IdentificationSettings,
+    PolymerFinding,
     identify_compounds,
     identify_polymers,
 )
@@ -36,6 +39,7 @@ from pyrecycle_analytics.library.retention_index import (
 )
 from pyrecycle_analytics.matrix.polyolefin import (
     MatrixSubtractionError,
+    MatrixSubtractionResult,
     detect_homologue_comb,
     subtract_polymer_matrix,
 )
@@ -53,10 +57,20 @@ __all__ = ["AnalysisResult", "analyse_pyrogram"]
 class AnalysisResult:
     """Everything one analysis produced.
 
+    The intermediate results are kept alongside the passport rather than thrown
+    away. A passport states conclusions; a reader who wants to check one needs the
+    evidence it rests on — which spectrum matched, how well, at which retention
+    index — and recomputing the chain to see it would take minutes.
+
     Attributes:
         passport: The deliverable.
         degradation: Ageing indices, kept separately so a caller can reuse them
             as the virgin reference for a later sample.
+        resolution: The resolved profiles and spectra behind the passport.
+        identifications: Every library match, including those too weak to reach
+            the passport.
+        polymer_findings: Marker patterns that fired, with their consistency.
+        matrix: The fitted polyolefin matrix, or ``None`` when no comb was found.
         n_components: Components the resolution returned.
         n_identified: Compounds the library matched.
         warnings: Everything the chain wanted to flag.
@@ -64,6 +78,10 @@ class AnalysisResult:
 
     passport: RecyclatePassport
     degradation: DegradationIndices | None
+    resolution: ResolutionResult
+    identifications: tuple[CompoundIdentification, ...]
+    polymer_findings: tuple[PolymerFinding, ...]
+    matrix: MatrixSubtractionResult | None
     n_components: int
     n_identified: int
     warnings: tuple[str, ...]
@@ -111,6 +129,7 @@ def analyse_pyrogram(
 
     calibration: RetentionIndexCalibration | None = None
     matrix_model = None
+    subtraction: MatrixSubtractionResult | None = None
     matrix_evidence: MatrixPolyolefinEvidence | None = None
     try:
         detection = detect_homologue_comb(preprocessed, matrix_type=config.matrix_type)
@@ -140,7 +159,7 @@ def analyse_pyrogram(
     except ValueError as error:
         warnings.append(f"degradation indices not computed: {error}")
 
-    if matrix_model is not None and degradation is not None:
+    if subtraction is not None and matrix_model is not None and degradation is not None:
         matrix_evidence = MatrixPolyolefinEvidence(
             signal_fraction=subtraction.explained_fraction,
             branching_index=degradation.branching_index,
@@ -184,6 +203,10 @@ def analyse_pyrogram(
     return AnalysisResult(
         passport=passport,
         degradation=degradation,
+        resolution=report.result,
+        identifications=tuple(identifications),
+        polymer_findings=tuple(findings),
+        matrix=subtraction,
         n_components=report.result.n_components,
         n_identified=len(identifications),
         warnings=tuple(warnings),

@@ -1,6 +1,6 @@
 # Roadmap Meilenstein 2 – 4
 
-> **Stand: umgesetzt.** MS2.0 bis MS4.4 sind gebaut, 865 Tests laufen grün. Der Plan bleibt
+> **Stand: umgesetzt.** MS2.0 bis MS4.4 sind gebaut, 877 Tests laufen grün. Der Plan bleibt
 > unverändert stehen — was daraus geworden ist, steht in [Abgleich: Plan gegen Ergebnis](#abgleich-plan-gegen-ergebnis)
 > Zeile für Zeile daneben, einschließlich der drei Akzeptanzkriterien, die **nicht** erreicht
 > wurden. Ein nachträglich an das Ergebnis angepasster Plan wäre wertlos.
@@ -409,8 +409,10 @@ Randkomponenten; weite machen die Auflösung unmöglich. Der Tausch ist getestet
   Optimierung profilieren.
 - **Persistenz:** offen. Die API hält Ergebnisse im Prozess, ein Neustart verliert sie. Die
   Tabellen im Bibliotheksschema sind vorhanden, die Anbindung fehlt.
-- **Streamlit:** offen. Die Oberfläche zeigt Import, Sichtung und Vorverarbeitung; aufgelöste
-  Profile, Identifikationstabelle und Pass-Vorschau fehlen noch.
+- **Streamlit:** ✅ umgesetzt. Der Reiter *Auswertung* fährt die ganze Kette und zeigt
+  Polymerfraktionen, Identifikationen, Regulatorik und Degradation, mit Download des Passes als
+  HTML und JSON. Bewusst hinter einem Knopf: Streamlit führt das Skript bei jeder Eingabe neu aus,
+  und eine Vollauflösung dauert ein bis zwei Minuten.
 
 ## Reihenfolge und Abhängigkeiten
 

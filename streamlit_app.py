@@ -1,24 +1,25 @@
-"""PyRecycle-Analytics — Streamlit-Oberfläche für Meilenstein 1.
+"""PyRecycle-Analytics — Streamlit-Oberfläche.
 
-Zweck: eigene Py-GC/MS-Messungen einlesen, sichten und vorverarbeiten. Die Datei
-wird per Upload entgegengenommen (.CDF / .mzML / .mzXML) — die synthetischen
-Rezepturen stehen daneben nur als Demo bereit, damit die Oberfläche auch ohne
-Messdaten ausprobiert werden kann.
+Zweck: eigene Py-GC/MS-Messungen einlesen, sichten, vorverarbeiten und
+auswerten. Die Datei wird per Upload entgegengenommen (.CDF / .mzML / .mzXML) —
+die synthetischen Rezepturen stehen daneben nur als Demo bereit, damit die
+Oberfläche auch ohne Messdaten ausprobiert werden kann.
 
-Was diese Oberfläche im Stand von Meilenstein 1 leistet:
+Was diese Oberfläche leistet:
 
 * Rohdaten-Import inklusive Formaterkennung, Provenienz und Reader-Warnungen
 * TIC, Ionenspuren (EIC) und Massenspektren an beliebiger Retentionszeit
 * Baseline-Korrektur und Glättung mit direktem Vorher/Nachher-Vergleich
+* die vollständige Auswertung bis zum Rezyklat-Pass, mit Download als HTML/JSON
 * Export des vorverarbeiteten Laufs
 
-Was sie noch **nicht** leistet: Deconvolution, Matrix-Subtraktion, Polymer-
-Identifikation, Degradations-Index. Das sind die Meilensteine 2 bis 4; bis dahin
-ist die Ionenspur-Ansicht bewusst ein Sichtwerkzeug und keine Auswertung.
+Die Ionenspur-Ansicht bleibt bewusst ein Sichtwerkzeug: eine Ionenspur ist kein
+Identitätsnachweis. Was ein belastbares Ergebnis ist, steht im Reiter
+*Auswertung* — samt Kalibrierstatus und den Einschränkungen, die dazugehören.
 
 Start::
 
-    pip install -e '.[io,ui]'
+    pip install -e '.[all]'
     streamlit run streamlit_app.py
 """
 
@@ -45,7 +46,7 @@ from pyrecycle_analytics.preprocessing import PreprocessingConfig, estimate_nois
 # Ionen, die beim Sichten eines Rezyklat-Pyrogramms erfahrungsgemäß zuerst
 # interessieren. Bewusst nur eine Anzeigehilfe: eine Ionenspur ist kein
 # Identitätsnachweis. Die quantitative Marker-Logik (Triaden-Verhältnisse,
-# Degradations-Index) kommt in Meilenstein 3 und wird dort auch so benannt.
+# Degradations-Index) steckt im Reiter "Auswertung".
 ION_PRESETS: dict[str, tuple[float, ...]] = {
     "Polyolefin-Matrix – Alkane (43, 57, 71)": (43.0, 57.0, 71.0),
     "Polyolefin-Matrix – Alkene (41, 55, 69)": (41.0, 55.0, 69.0),
@@ -173,15 +174,20 @@ def _spectrum_figure(mz_axis: np.ndarray, intensities: np.ndarray, title: str) -
 
 
 def _metadata_table(cube: PyrogramDataCube) -> pd.DataFrame:
-    """Kennzahlen des Laufs als Tabelle."""
+    """Kennzahlen des Laufs als Tabelle.
+
+    Alle Werte sind Text. Eine Spalte mit gemischten Typen wird zu ``object``,
+    und Streamlit reicht die an Arrow weiter, das sie ablehnt — die Tabelle
+    verschwände dann hinter einer Serialisierungsmeldung.
+    """
     rt_start, rt_end = cube.rt_range_s
     metadata = cube.metadata
-    rows: list[tuple[str, Any]] = [
+    rows: list[tuple[str, str]] = [
         ("Probe", metadata.sample.sample_id),
         ("Quelle", str(metadata.source_path or "—")),
         ("Format", str(metadata.source_format)),
         ("Scans", f"{cube.n_scans:,}".replace(",", " ")),
-        ("m/z-Kanäle", cube.n_mz),
+        ("m/z-Kanäle", str(cube.n_mz)),
         ("m/z-Bereich", f"{cube.mz_axis[0]:.0f} – {cube.mz_axis[-1]:.0f}"),
         ("Retentionsbereich", f"{rt_start / 60.0:.2f} – {rt_end / 60.0:.2f} min"),
         ("Scanrate", f"{1.0 / cube.mean_scan_period_s:.2f} Hz" if cube.mean_scan_period_s else "—"),
@@ -307,7 +313,7 @@ def _tab_overview(
 
     with left:
         st.subheader("Lauf")
-        st.dataframe(_metadata_table(cube), hide_index=True, use_container_width=True)
+        st.dataframe(_metadata_table(cube), hide_index=True, width="stretch")
         if blend is not None:
             st.caption("Simulierte Soll-Zusammensetzung (Massenanteile):")
             st.dataframe(
@@ -315,14 +321,14 @@ def _tab_overview(
                     sorted(blend.items()), columns=["Polymer", "Massenanteil"]
                 ).assign(Massenanteil=lambda frame: frame["Massenanteil"].map("{:.1%}".format)),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
 
     with right:
         st.subheader("Totalionenstrom")
         st.plotly_chart(
             _chromatogram_figure({"TIC": (cube.retention_times, cube.tic)}, "TIC"),
-            use_container_width=True,
+            width="stretch",
         )
 
     if cube.metadata.reader_warnings:
@@ -383,7 +389,7 @@ def _tab_ion_traces(cube: PyrogramDataCube) -> None:
         _chromatogram_figure(
             traces, preset, "relative Intensität" if normalise else "Intensität"
         ),
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -430,7 +436,7 @@ def _tab_spectrum(cube: PyrogramDataCube) -> None:
         _spectrum_figure(
             cube.mz_axis, spectrum, f"Scan {scan} bei {cube.retention_times[scan] / 60.0:.3f} min"
         ),
-        use_container_width=True,
+        width="stretch",
     )
 
     if spectrum.max() > 0:
@@ -444,7 +450,7 @@ def _tab_spectrum(cube: PyrogramDataCube) -> None:
                 }
             ),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -473,7 +479,7 @@ def _tab_preprocessing(raw: PyrogramDataCube, processed: PyrogramDataCube | None
             },
             f"{channel}: vor und nach der Vorverarbeitung",
         ),
-        use_container_width=True,
+        width="stretch",
     )
 
     left, middle, right = st.columns(3)
@@ -492,6 +498,253 @@ def _tab_preprocessing(raw: PyrogramDataCube, processed: PyrogramDataCube | None
     st.caption(
         "Ein stark negativer Signalunterschied ist normal: der abgezogene Untergrund "
         "macht bei einer bluten­den Säule leicht ein Vielfaches des Analytsignals aus."
+    )
+
+
+def _tab_analysis(cube: PyrogramDataCube, blend: dict[str, float] | None) -> None:
+    """Die vollständige Auswertung: Matrix, Auflösung, Identifikation, Pass.
+
+    Bewusst hinter einem Knopf und nicht bei jedem Rerun: eine Vollauflösung
+    dauert ein bis zwei Minuten. Streamlit führt das Skript bei jeder Eingabe neu
+    aus, also würde ein automatischer Start die Oberfläche unbenutzbar machen.
+    """
+    st.subheader("Auswertung")
+    st.caption(
+        "Vorverarbeitung, Abzug der Polyolefin-Matrix, Kurvenauflösung (MCR-ALS), "
+        "Identifikation gegen die Marker-Bibliothek, Degradations-Indizes und der "
+        "Rezyklat-Pass — in einem Durchlauf. Dauert je nach Größe des Laufs ein "
+        "bis zwei Minuten."
+    )
+
+    left, right = st.columns([1, 2])
+    first_carbon = left.number_input(
+        "Kettenlänge des ersten Alkan-Clusters",
+        min_value=0, max_value=40, value=0, step=1,
+        help="0 = unbekannt. Mit Angabe wird die Kováts-Leiter darauf verankert, "
+        "ohne sie über die Totzeit geschätzt — der Pass weist beides aus.",
+    )
+    right.checkbox(
+        "Kalibriert (gravimetrische Referenzmischungen liegen vor)",
+        value=False, disabled=True,
+        help="In der Oberfläche bewusst gesperrt. Diese Angabe entscheidet, ob der "
+        "Pass seine Prozente als quantitativ ausweist; sie gehört an den "
+        "Methodennachweis, nicht an eine Checkbox.",
+    )
+
+    if st.button("Auswertung starten", type="primary"):
+        st.session_state["analysis"] = _run_analysis(
+            cube, int(first_carbon) or None
+        )
+
+    outcome = st.session_state.get("analysis")
+    if outcome is None:
+        st.info("Noch keine Auswertung gestartet.")
+        return
+    if isinstance(outcome, str):
+        st.error(outcome)
+        return
+
+    passport, tables, html = outcome
+    _render_passport(passport, tables, html, blend)
+
+
+@st.cache_data(show_spinner="Auswertung läuft — Matrix, MCR-ALS, Identifikation …")
+def _run_analysis(
+    cube: PyrogramDataCube, first_carbon_number: int | None
+) -> tuple[dict[str, Any], dict[str, pd.DataFrame], str] | str:
+    """Die Kette ausführen und in anzeigbare Strukturen überführen.
+
+    Gibt einfache Typen zurück statt der Ergebnisobjekte: Streamlits Cache
+    serialisiert, und ein ``PyrogramDataCube`` im Ergebnis würde jeden Treffer
+    unnötig teuer machen. Ein Fehler kommt als Text zurück, damit er die
+    Oberfläche nicht abbricht.
+    """
+    from pyrecycle_analytics.library.repository import MarkerLibrary
+    from pyrecycle_analytics.reporting import analyse_pyrogram, render_html
+
+    try:
+        library = MarkerLibrary.in_memory()
+        result = analyse_pyrogram(
+            cube, library, first_carbon_number=first_carbon_number
+        )
+    except PyRecycleError as error:
+        return f"Auswertung fehlgeschlagen: {error}"
+
+    passport = result.passport
+    tables = {
+        "Polymerfraktionen": pd.DataFrame(
+            [
+                {
+                    "Polymer": str(fraction.polymer),
+                    "Anteil [%]": round(fraction.share_percent, 2),
+                    "Konfidenz": str(fraction.confidence),
+                    "Markermuster": fraction.marker_pattern,
+                    "Marker": f"{len(fraction.markers_found)}/{fraction.markers_expected}",
+                }
+                for fraction in passport.polymer_fractions
+            ]
+            + [
+                {
+                    "Polymer": "nicht zugeordnet",
+                    "Anteil [%]": round(passport.unassigned_share_percent, 2),
+                    "Konfidenz": "—",
+                    "Markermuster": "Signal, das kein erkanntes Polymer erklärt",
+                    "Marker": "—",
+                }
+            ]
+        ),
+        "Identifikationen": pd.DataFrame(
+            [
+                {
+                    "Verbindung": hit.compound_name,
+                    "RT [min]": round(hit.retention_time_s / 60.0, 2),
+                    "RI (Probe)": round(hit.retention_index, 0),
+                    "RI (Bibliothek)": round(hit.library_retention_index, 0),
+                    "Spektrum": round(hit.spectral_similarity, 3),
+                    "RI-Übereinstimmung": round(hit.retention_agreement, 3),
+                    "Score": round(hit.score, 3),
+                    "Fläche": f"{hit.area:.4g}",
+                }
+                for hit in sorted(result.identifications, key=lambda h: -h.score)
+            ]
+        ),
+        "Regulatorik": pd.DataFrame(
+            [
+                {
+                    "Substanz": finding.substance,
+                    "CAS": finding.cas_number or "—",
+                    "Befund": "detektiert" if finding.detected else "nicht detektiert",
+                    "Grenzwert [%]": finding.limit_percent,
+                    "Bewertung": (
+                        "nicht bewertbar"
+                        if finding.exceeds_limit is None and finding.detected
+                        else "—"
+                        if finding.exceeds_limit is None
+                        else "ÜBER GRENZWERT"
+                        if finding.exceeds_limit
+                        else "eingehalten"
+                    ),
+                }
+                for finding in passport.regulatory_findings
+            ]
+        ),
+    }
+
+    degradation = result.degradation
+    summary: dict[str, Any] = {
+        "sample_id": passport.sample.sample_id,
+        "calibration_status": str(passport.calibration_status),
+        "disclaimer": passport.calibration_status.disclaimer,
+        "unassessable": list(passport.unassessable_findings),
+        "n_components": result.n_components,
+        "n_identified": result.n_identified,
+        "matrix_fraction": passport.provenance.matrix_explained_fraction,
+        "ri_anchor": passport.provenance.retention_index_anchor or "keine",
+        "warnings": list(result.warnings),
+        "degradation": (
+            {
+                "Carbonyl-Index": degradation.carbonyl_index,
+                "Säureanteil": degradation.acid_share,
+                "Alken/Alkan": degradation.alkene_to_alkane,
+                "Verzweigungsindex": degradation.branching_index,
+                "mittlere Kettenlänge": degradation.mean_carbon_number,
+            }
+            if degradation is not None
+            else None
+        ),
+        "degradation_notes": list(degradation.notes) if degradation is not None else [],
+        "json": passport.model_dump_json(indent=2),
+    }
+    return summary, tables, render_html(passport)
+
+
+def _render_passport(
+    summary: dict[str, Any],
+    tables: dict[str, pd.DataFrame],
+    html: str,
+    blend: dict[str, float] | None,
+) -> None:
+    """Das Ergebnis anzeigen — Einschränkungen vor den Zahlen, wie im Dokument."""
+    st.warning(
+        f"**Kalibrierstatus: {summary['calibration_status']}** — {summary['disclaimer']}"
+    )
+    if summary["unassessable"]:
+        st.error(
+            "**Detektiert, Konformität nicht bewertbar:** "
+            + ", ".join(summary["unassessable"])
+            + ". Grenzwerte sind Massenanteile; ohne Kalibrierstandards wird hier "
+            "keine Aussage über Einhaltung getroffen."
+        )
+
+    columns = st.columns(4)
+    columns[0].metric("Komponenten aufgelöst", summary["n_components"])
+    columns[1].metric("Verbindungen identifiziert", summary["n_identified"])
+    columns[2].metric("Matrixanteil am Signal", f"{summary['matrix_fraction']:.1%}")
+    columns[3].metric("RI-Verankerung", summary["ri_anchor"])
+
+    st.markdown("#### Polymerfraktionen")
+    st.dataframe(tables["Polymerfraktionen"], hide_index=True, width="stretch")
+    st.caption(
+        "Nicht zugeordnetes Signal wird ausgewiesen und **nicht** auf die erkannten "
+        "Polymere verteilt — eine Verteilung würde jede Zahl proportional zu dem "
+        "aufblähen, was die Methode nicht erklären konnte."
+    )
+    if blend:
+        st.caption(
+            "Bekannte Einwaage der Demo-Rezeptur (Massenanteile, nicht "
+            "Signalanteile): "
+            + ", ".join(f"{name} {100.0 * value:.1f} %" for name, value in blend.items())
+        )
+
+    st.markdown("#### Identifikationen")
+    if tables["Identifikationen"].empty:
+        st.info("Keine Verbindung erreichte die Schwelle der Bibliothek.")
+    else:
+        st.dataframe(tables["Identifikationen"], hide_index=True, width="stretch")
+
+    st.markdown("#### Regulierte Substanzen")
+    st.dataframe(tables["Regulatorik"], hide_index=True, width="stretch")
+
+    st.markdown("#### Degradation")
+    if summary["degradation"] is None:
+        st.info("Degradations-Indizes konnten nicht berechnet werden.")
+    else:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"Kennzahl": key, "Wert": round(value, 4)}
+                    for key, value in summary["degradation"].items()
+                    if value is not None
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "Diese Kennzahlen sind Verhältnisse. Ohne eine Virgin-Referenz desselben "
+            "Materials unter derselben Methode sind sie nicht interpretierbar und "
+            "dürfen nicht über Polymere hinweg verglichen werden."
+        )
+        for note in summary["degradation_notes"]:
+            st.caption(f"· {note}")
+
+    if summary["warnings"]:
+        with st.expander(f"Hinweise der Auswertung ({len(summary['warnings'])})"):
+            for warning in summary["warnings"]:
+                st.markdown(f"- {warning}")
+
+    left, right = st.columns(2)
+    left.download_button(
+        "Pass als HTML",
+        data=html,
+        file_name=f"pass-{summary['sample_id']}.html",
+        mime="text/html",
+    )
+    right.download_button(
+        "Pass als JSON",
+        data=summary["json"],
+        file_name=f"pass-{summary['sample_id']}.json",
+        mime="application/json",
     )
 
 
@@ -524,7 +777,7 @@ def main() -> None:
     st.title("PyRecycle-Analytics")
     st.caption(
         f"Py-GC/MS-Auswertung für Post-Consumer-Rezyklate · Version {__version__} · "
-        "Meilenstein 1: Import, Sichtung, Vorverarbeitung"
+        "Import, Sichtung, Vorverarbeitung, Auswertung bis zum Rezyklat-Pass"
     )
 
     if not pyopenms_available():
@@ -549,8 +802,15 @@ def main() -> None:
 
     processed = preprocess(cube, config) if config is not None else None
 
-    overview, traces, spectrum, comparison, export = st.tabs(
-        ["Übersicht", "Ionenspuren", "Massenspektrum", "Vorverarbeitung", "Export"]
+    overview, traces, spectrum, comparison, analysis, export = st.tabs(
+        [
+            "Übersicht",
+            "Ionenspuren",
+            "Massenspektrum",
+            "Vorverarbeitung",
+            "Auswertung",
+            "Export",
+        ]
     )
     active = processed if processed is not None else cube
 
@@ -562,6 +822,13 @@ def main() -> None:
         _tab_spectrum(active)
     with comparison:
         _tab_preprocessing(cube, processed)
+    with analysis:
+        # Absichtlich der Rohlauf: analyse_pyrogram bringt seine eigene
+        # Vorverarbeitung mit und protokolliert sie im Pass. Ein bereits
+        # vorverarbeiteter Cube würde zweimal baseline-korrigiert und die
+        # Provenienz im Pass stimmte nicht mehr mit dem überein, was gerechnet
+        # wurde.
+        _tab_analysis(cube, blend)
     with export:
         _tab_export(active)
 
