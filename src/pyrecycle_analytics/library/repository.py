@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from data_schemas.enums import PolymerClass
 from pyrecycle_analytics.library.reference_data import (
@@ -50,6 +51,14 @@ _POLYMER_NAMES: dict[PolymerClass, str] = {
 def create_library(url: str = "sqlite:///:memory:", *, echo: bool = False) -> Engine:
     """Create an empty library database.
 
+    In-memory SQLite needs two non-default pool settings, and leaving them out
+    produces a failure that only appears under a server. SQLAlchemy's default pool
+    for ``:memory:`` hands out one connection *per thread*, and each connection
+    gets its own empty database — so the schema is created on one connection and
+    every query from a worker thread reports "no such table". A single shared
+    connection fixes it, and ``check_same_thread=False`` is what lets SQLite be
+    used from more than one thread at all.
+
     Args:
         url: SQLAlchemy URL. In-memory SQLite by default; PostgreSQL in production.
         echo: Log emitted SQL.
@@ -57,7 +66,12 @@ def create_library(url: str = "sqlite:///:memory:", *, echo: bool = False) -> En
     Returns:
         A connected engine with the schema created.
     """
-    engine = create_engine(url, echo=echo, future=True)
+    arguments: dict[str, object] = {"echo": echo, "future": True}
+    if ":memory:" in url:
+        arguments["poolclass"] = StaticPool
+        arguments["connect_args"] = {"check_same_thread": False}
+
+    engine = create_engine(url, **arguments)
     Base.metadata.create_all(engine)
     return engine
 
