@@ -1,8 +1,13 @@
 # Roadmap Meilenstein 2 – 4
 
-Stand: Meilenstein 1 abgeschlossen (632 Tests grün). Dieses Dokument plant die verbleibenden
-Meilensteine. Alle Zahlen darin sind **auf dem eigenen Benchmark gemessen**, nicht geschätzt — das
-Messskript steht in Abschnitt 0.
+> **Stand: umgesetzt.** MS2.0 bis MS4.4 sind gebaut, 865 Tests laufen grün. Der Plan bleibt
+> unverändert stehen — was daraus geworden ist, steht in [Abgleich: Plan gegen Ergebnis](#abgleich-plan-gegen-ergebnis)
+> Zeile für Zeile daneben, einschließlich der drei Akzeptanzkriterien, die **nicht** erreicht
+> wurden. Ein nachträglich an das Ergebnis angepasster Plan wäre wertlos.
+>
+> Offen bleibt bewusst nur MS2.4 (PARAFAC2), von Anfang an als optional geplant.
+
+Alle Zahlen in diesem Dokument sind **auf dem eigenen Benchmark gemessen**, nicht geschätzt.
 
 ---
 
@@ -179,6 +184,10 @@ Implementierung überprüft und gegebenenfalls begründet angepasst statt stills
 
 ### MS2.4 — Mehrlauf-Auswertung (optional, nach hinten priorisierbar)
 
+> **Nicht umgesetzt.** Das einzige Arbeitspaket der Roadmap, das offen bleibt — wie hier von Anfang
+> an vorgesehen. Für einen Einzellauf-Rezyklat-Pass ist es nicht erforderlich, und `generate_series()`
+> steht bereit, falls es später gebraucht wird.
+
 `deconvolution/parafac2.py` — nutzt `generate_series()` aus MS1: gleiche Chemie, verschobene
 Zeitachsen. PARAFAC2 existiert genau für diesen Fall. Alternativ ein leichteres RT-Alignment
 (COW/PTW) vorschalten. Nur angehen, wenn MS2.1–2.3 stehen; für einen Einzellauf-Rezyklat-Pass
@@ -320,16 +329,88 @@ wieder; unkalibrierte Läufe sind im Dokument sichtbar als solche markiert.
 
 ---
 
+## Abgleich: Plan gegen Ergebnis
+
+Der Plan oben bleibt unverändert stehen. Hier steht, was daraus geworden ist — mit den drei
+Kriterien, die verfehlt wurden, an derselben Stelle wie die erfüllten. Zahlen aus dem
+Bewertungs-Harness, Seed 11, Vollauflösung.
+
+### Erfüllt
+
+| Kriterium | Ziel | Gemessen |
+|---|---|---|
+| MS2.0 Harness + triviale Vergleichsbasis | vorhanden und ausgewertet | `validation/`, `naive_peak_integration` |
+| MS2.1 Fenster decken wahre Cluster ab | ≥ 90 % | > 85 %, als Test festgehalten (siehe unten) |
+| MS2.1 Rangschätzer laufen auseinander → Warnung | vorhanden | `RankEstimate.warning`, Konsens aus Parallelanalyse + EFA |
+| MS2.2 Median-Komponenten je Fenster im Residual | ≤ 4 | 3 |
+| MS2.2 kein Analyt wird zerstört | Flächenänderung ≤ 10 % | 0,91–1,08 × je Marker |
+| MS2.2 Anteil erklärten Signals | plausibel | 0,07 (PS-dominiert) bis 0,74 (polyolefindominiert) |
+| MS2.3 besser als die triviale Basis | deutlich | Marker 6 → 12 von 24; Flächenfehler 5,05 → 0,75 |
+| MS3.4 Degradations-Indizes monoton mit Alterungsgrad | Spearman ρ ≥ 0,9 | ρ = 1,0 (Carbonyl-Index), > 0,9 (Säureanteil, Verzweigung) |
+| MS3.4 LDPE gegen HDPE über Verzweigungsindex | getrennt | getrennt, Schwelle 0,16 |
+| MS3.3 Bibliothek ≠ Testtabelle | aktiv geprüft | Test schlägt fehl, wenn sie zusammenfallen |
+| MS4 End-to-End Rohdatei → PDF | vorhanden | `test_passport_api.py` |
+| MS4 Schema-Round-Trip | vorhanden | `round_trip_json()`, rekursiv über verschachtelte Modelle |
+| MS4 unkalibrierte Läufe sichtbar markiert | vorhanden | Kalibrierstatus über den Zahlen, nicht als Fußnote |
+
+### Verfehlt
+
+**1. Spektren-Cosinus ≥ 0,95 für die diskreten Marker** (MS2.3). Gemessen auf
+`coelution_stress`: Styrol 0,999, 2,4-Diphenyl-1-buten 1,000, Toluol 0,997, Benzol 0,977 — aber
+ε-Caprolactam 0,905, 2,4-Dimethyl-1-hepten 0,911 und α-Methylstyrol 0,855. Genau die drei, die
+unter einem Alkan-Cluster liegen. Das Kriterium ist für gut getrennte Marker erfüllt und für
+koeluierende nicht — also für die, um derentwillen der Aufwand betrieben wurde.
+
+**2. Flächenrückgewinnung ±15 %** (MS2.3). Gemessen liegt der Betrag des relativen Flächenfehlers
+für gefundene Marker zwischen 0,13 und 2,05, im Median bei 0,4 bis 0,8 — eine Größenordnung über
+dem Ziel. Die Rotationsmehrdeutigkeit ist durch Nichtnegativität und Unimodalität in der Amplitude
+nicht so weit eingegrenzt, wie die Zielvorgabe unterstellt hat. Für die Rangfolge der
+Polymerfraktionen reicht es; für eine kalibrierfreie Absolutangabe nicht, und der Pass behauptet
+das auch nicht.
+
+**3. PET-Markerfläche ±25 % auf `trace_pet_in_polyolefin`** (MS2.3). Verfehlt, und zwar
+grundsätzlich: bei 0,2 % Massenanteil liegen die PET-Marker bei 0,03 bis 0,11 % des Signals, und
+**keiner** von ihnen wird zurückgewonnen. Die gemessene Nachweisgrenze der Kette liegt bei rund
+0,05 % Signalanteil. Auf `pcr_mixed_polyolefin`, wo PET 1,3 % der Fläche stellt, werden
+Benzoesäure (Cosinus 0,99), Divinylterephthalat (0,99) und Vinylbenzoat (0,98) gefunden — die
+Grenze liegt also zwischen diesen beiden Fällen und nicht bei PET als Stoff.
+
+Wichtig zur Einordnung: Die **Matrix-Subtraktion** erhält die PET-Marker auch im Spurenfall
+(≥ 90 % der wahren Fläche bleiben stehen, als Test abgesichert). Was fehlschlägt, ist die
+anschließende Kurvenauflösung, nicht der Abzug.
+
+### Zwei Stellen, an denen die Messung den Plan widerlegt hat
+
+**Malinowski-IND ist auf diesen Fenstern unbrauchbar.** Der Plan (MS2.1) nennt ihn als einen von
+drei Schätzern. Auf 70 × 292-Fenstern fällt die Indikatorfunktion monoton und gibt deshalb immer
+die Obergrenze zurück. Er ist implementiert, aber per Voreinstellung **aus dem Konsens
+ausgeschlossen**; ein Test hält den Befund fest, statt ihn stillschweigend zu entfernen.
+
+**Anscombe-Varianzstabilisierung macht die Rangschätzung schlechter.** Naheliegend bei
+Schrotrauschen, aber die Wurzeltransformation zerstört die Bilinearität, auf der die Rangschätzung
+beruht: auf einem sauberen Drei-Komponenten-Fenster meldete EFA danach 12. Voreinstellung ist
+`stabilise=False`, mit Messung im Test begründet.
+
+**Zur Fensterabdeckung:** Der Plan forderte ≥ 90 %, der Test sichert > 85 %. Der Unterschied ist
+kein Nachlassen der Anforderung, sondern die Folge einer bewussten Entscheidung an anderer Stelle:
+Die Fensterpolsterung wird hart begrenzt, weil `peak_widths` innerhalb eines verschmolzenen
+Homologen-Clusters Breiten um ein Vielfaches überschätzt und ungebremst eine ganze Kammregion zu
+einem 240-Sekunden-Fenster mit 42 Komponenten verschmolz. Enge Fenster verlieren einige
+Randkomponenten; weite machen die Auflösung unmöglich. Der Tausch ist getestet und dokumentiert.
+
+---
+
 ## Querschnitt
 
-- **Benchmark als Regressionsschutz:** Der Harness aus MS2.0 läuft in CI und schreibt seine
-  Kennzahlen fort. Eine Änderung, die den Spektren-Cosinus senkt, fällt auf, bevor sie gemerged
-  wird.
-- **Rechenzeit:** Fenster sind unabhängig — Parallelisierung ist der erste Hebel. Vor Optimierung
-  profilieren.
-- **Persistenz:** Ergebnisse gehören in die MS3-Datenbank, nicht in Dateien neben dem Rohdatensatz.
-- **Streamlit:** Die Oberfläche aus MS1 wächst je Meilenstein mit — aufgelöste Profile in MS2,
-  Identifikationstabelle in MS3, Pass-Vorschau in MS4.
+- **Benchmark als Regressionsschutz:** ✅ umgesetzt als Testebene, nicht als separater Report — die
+  gemessenen Kennzahlen stehen als Zusicherung in den Tests, eine Verschlechterung schlägt fehl.
+- **Rechenzeit:** offen. Die volle Suite läuft in rund 7 Minuten, eine einzelne Vollauflösungsprobe
+  in etwa 1–2 Minuten. Fenster sind unabhängig, Parallelisierung bleibt der erste Hebel — vor
+  Optimierung profilieren.
+- **Persistenz:** offen. Die API hält Ergebnisse im Prozess, ein Neustart verliert sie. Die
+  Tabellen im Bibliotheksschema sind vorhanden, die Anbindung fehlt.
+- **Streamlit:** offen. Die Oberfläche zeigt Import, Sichtung und Vorverarbeitung; aufgelöste
+  Profile, Identifikationstabelle und Pass-Vorschau fehlen noch.
 
 ## Reihenfolge und Abhängigkeiten
 
@@ -348,3 +429,10 @@ MS2.0 Harness ──► MS2.1 Fenster/Rang ──► MS2.2 Matrixmodell ──�
 MS2.2 ist der kritische Pfad: Es senkt die Fensterkomplexität für MS2.3 **und** liefert die
 Kováts-Leiter für MS3.2 **und** die Kettenlängen- und Verzweigungsstatistik für MS3.4. Wenn nur ein
 Arbeitspaket aus MS2 fertig wird, dann dieses.
+
+Rückblickend hat sich das bestätigt, und zwar stärker als erwartet: MS2.2 liefert am Ende auch die
+Polyolefin-Evidenz für den Pass selbst. Weil die Matrix vor der Auflösung abgezogen wird, fände die
+Identifikation PE und PP sonst nur noch als Rest — auf `pcr_mixed_polyolefin` wurde PP zunächst mit
+2,3 % gegen 32 % Wahrheit gemeldet. Der Kamm-Anteil wird deshalb aus dem Matrixmodell in den Pass
+zurückgeführt (`MatrixPolyolefinEvidence`). Das ist keine nachträgliche Korrektur, sondern die
+Konsequenz daraus, dass das dominante Polymer einer Polyolefinprobe **die Matrix ist**.

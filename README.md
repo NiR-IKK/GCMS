@@ -5,9 +5,12 @@ Py-GC/MS-Auswerteplattform für die **inverse Polymeranalytik** von Post-Consume
 Ziel ist nicht generische Chromatographie-Software, sondern der Rückschluss von überlappenden
 Pyrolysaten auf polymere Hauptkomponenten, Additive und Degradationsgrade.
 
-> **Status: Meilenstein 1 abgeschlossen.** Ingestion-Layer, Datenmodell, Preprocessing, Streamlit-
-> Oberfläche und der synthetische Pyrogramm-Generator stehen; 632 Tests laufen grün. Meilenstein 2
-> (MCR-ALS & Matrix-Subtraktion) setzt direkt auf dem hier erzeugten Ground Truth auf.
+> **Status: Meilensteine 1 bis 4 abgeschlossen.** Von der Rohdatei bis zum Rezyklat-Pass läuft die
+> Kette durch: Ingestion, Preprocessing, Matrix-Subtraktion, MCR-ALS, Marker-Bibliothek,
+> Identifikation, Degradations-Index, Pass als JSON/HTML/PDF und eine FastAPI-Schnittstelle.
+> 865 Tests laufen grün. Was die Kette auf dem eigenen Benchmark tatsächlich leistet — und wo sie
+> ausdrücklich an ihre Grenzen kommt — steht gemessen in [Abschnitt 6](#6-was-die-kette-leistet-und-wo-sie-aufhört).
+> Offen bleibt bewusst nur MS2.4 (PARAFAC2-Mehrlaufauswertung), von Anfang an als optional geplant.
 
 ---
 
@@ -18,16 +21,31 @@ Messdateien gebaut; der Generator liegt bewusst in `tests/`, weil ohne ihn keine
 automatisiert prüfbar wäre.
 
 ```bash
-pip install -e '.[io,ui]'
+pip install -e '.[all]'
 streamlit run streamlit_app.py     # links "Eigene Messung hochladen"
 ```
 
-Oder direkt aus Python:
+Oder direkt aus Python, von der Rohdatei bis zum fertigen Pass:
 
 ```python
 from pyrecycle_analytics.ingestion import read_pyrogram
+from pyrecycle_analytics.library.repository import MarkerLibrary
+from pyrecycle_analytics.reporting import analyse_pyrogram, render_pdf
 
 cube = read_pyrogram("Probe_4711.CDF")
+result = analyse_pyrogram(cube, MarkerLibrary.in_memory())
+
+for fraction in result.passport.polymer_fractions:
+    print(fraction.polymer, f"{fraction.share_percent:.1f} %", fraction.confidence)
+print("nicht zugeordnet:", f"{result.passport.unassigned_share_percent:.1f} %")
+
+render_pdf(result.passport, "Probe_4711_Pass.pdf")
+```
+
+Oder als Dienst:
+
+```bash
+uvicorn pyrecycle_analytics.api.app:create_app --factory     # OpenAPI unter /docs
 ```
 
 **Welches Exportformat?** `.CDF` (ANDI-MS / AIA netCDF) exportiert jedes gängige GC/MS — bei
@@ -36,12 +54,11 @@ Agilent ChemStation und MassHunter sowie bei Shimadzu GCMSsolution heißt der Me
 netCDF-**4**/HDF5-Container mit `.cdf`-Endung ist kein ANDI-MS; die Software sagt das mit
 Lösungshinweis, statt kryptisch abzustürzen.
 
-**Was mit echten Daten heute schon geht:** Import mit Provenienz und Reader-Warnungen, TIC,
-Ionenspuren, Massenspektren mit Untergrundabzug, Baseline-Korrektur, Glättung, Export.
-
-**Was noch nicht geht:** Deconvolution, Matrix-Subtraktion, Polymer-Identifikation,
-Degradations-Index, Rezyklat-Pass. Das sind die Meilensteine 2 bis 4 — bis dahin ist die
-Ionenspur-Ansicht ein Sichtwerkzeug und ausdrücklich keine Auswertung.
+**Was der Pass ausdrücklich nicht ist.** Ohne gravimetrisch angesetzte Referenzmischungen, die
+unter derselben Methode gemessen wurden, sind alle Prozentangaben semiquantitativ. Das Dokument
+schreibt das als Kalibrierstatus über die Zahlen, nicht in eine Fußnote darunter — und ein
+regulatorischer Nachweis („DEHP detektiert") wird strikt von einer Konformitätsaussage getrennt,
+die er ohne Kalibrierstandards nicht trägt.
 
 ---
 
@@ -98,7 +115,8 @@ data_schemas/                    Pydantic-Datenmodell (ohne schwere Abhängigkei
 ├── enums.py                     PolymerClass, MarkerRole, RecyclateStream, SourceFormat
 ├── acquisition.py               Pyrolyse-, GC- und MS-Bedingungen, Probenmetadaten
 ├── pyrogram.py                  PyrogramMetadata, MzAxisSpec, Preprocessing-Audit-Trail
-└── truth.py                     ComponentTruth, DriftTruth, PyrogramTruth (Benchmark-Referenz)
+├── truth.py                     ComponentTruth, DriftTruth, PyrogramTruth (Benchmark-Referenz)
+└── passport.py                  RecyclatePassport, Kalibrierstatus, Regulatorik-Befunde
 
 src/pyrecycle_analytics/
 ├── core/
@@ -115,6 +133,28 @@ src/pyrecycle_analytics/
 │   ├── baseline.py              AsLS (Eilers/Boelens) und SNIP, kanalweise
 │   ├── smoothing.py             Savitzky-Golay, Gauss, robuste Rauschschätzung
 │   └── pipeline.py              Deklarative, reproduzierbare Preprocessing-Kette
+├── validation/                  Bewertungs-Harness: ungarische Zuordnung, Kennzahlen,
+│                                triviale Vergleichsbasis
+├── matrix/
+│   └── polyolefin.py            Homologenreihen-Modell und subtract_polymer_matrix
+├── deconvolution/
+│   ├── windows.py               Fensterbildung auf TIC + kanalweiser Aktivität
+│   ├── rank.py                  Parallelanalyse, EFA, Malinowski-IND, Konsens + Warnung
+│   ├── mcrals.py                SIMPLISMA-Start, ALS mit Nichtnegativität/Unimodalität
+│   └── pipeline.py              resolve_pyrogram: Matrix-Abzug → Fenster → Rang → MCR-ALS
+├── library/
+│   ├── schema.py                SQLAlchemy-2.0-Modell (Compound, Spektrum, RI, Muster)
+│   ├── reference_data.py        Kuratierte Bibliothek — bewusst getrennt von tests/
+│   ├── repository.py            MarkerLibrary: lesende Sicht ohne offene Session
+│   └── retention_index.py       Kováts-Leiter aus dem Alkan-Kamm der Probe selbst
+├── identification/engine.py     Spektrenähnlichkeit + RI + Marker-Muster → Konfidenz
+├── degradation/engine.py        Carbonyl-Index, Säureanteil, Alken/Alkan, Verzweigung
+├── reporting/
+│   ├── analysis.py              analyse_pyrogram: die vollständige Kette
+│   ├── passport.py              build_passport, MatrixPolyolefinEvidence
+│   ├── reach.py                 Wachliste + Notiz zum nicht GC-gängigen Teil
+│   └── render.py                Deterministisches HTML, PDF via WeasyPrint
+├── api/app.py                   FastAPI: Upload, Analyse-Job, Pass, Bibliothek
 └── exceptions.py
 
 streamlit_app.py                 Oberfläche: Upload, Sichtung, Vorverarbeitung, Export
@@ -122,7 +162,7 @@ streamlit_app.py                 Oberfläche: Upload, Sichtung, Vorverarbeitung,
 tests/
 ├── synthetic_data.py            SyntheticPyrogramGenerator (TDD-Basis)
 ├── reference_spectra.py         EI-Spektren und Retentionsanker der Marker
-└── test_*.py                    632 Tests
+└── test_*.py                    865 Tests
 ```
 
 ---
@@ -131,14 +171,23 @@ tests/
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[io,ui,dev]'   # io = pyopenms (mzML/mzXML), ui = Streamlit + Plotly
-pytest                          # 632 Tests, ca. 25 s
+pip install -e '.[all]'         # oder gezielt: io, db, api, report, ui, dev
+pytest                          # 865 Tests, ca. 7 min
 streamlit run streamlit_app.py
 ```
 
-Ohne `pyopenms` bleibt alles außer dem mzML/mzXML/mzData-Reader nutzbar; die entsprechenden
-Tests überspringen sich selbst, und der Reader wirft eine `MissingDependencyError` mit dem
-passenden Installationsbefehl.
+| Extra | Wofür | Ohne das Extra |
+|---|---|---|
+| `io` | pyopenms — mzML / mzXML / mzData | `.CDF` liest scipy; die mzML-Tests überspringen sich selbst |
+| `db` | SQLAlchemy — Marker-Bibliothek | keine Identifikation, kein Pass |
+| `api` | FastAPI, uvicorn, python-multipart | `analyse_pyrogram(...)` läuft weiter ohne Server |
+| `report` | WeasyPrint — PDF | HTML und JSON bleiben nutzbar |
+| `ui` | Streamlit, Plotly | die Bibliotheks-API bleibt unberührt |
+
+`pyopenms` und WeasyPrint werden erst beim Aufruf importiert und fehlen laut: die betroffene
+Funktion wirft eine `MissingDependencyError`, die Paketname, Zweck und den passenden
+Installationsbefehl nennt, statt eines nackten `ImportError` tief in der Kette. Die übrigen Extras
+sind Importvoraussetzung ihres Teilpakets — ohne `db` lässt sich `library` nicht importieren.
 
 ---
 
@@ -198,6 +247,53 @@ processed = preprocess(cube, config)
 Die Kette ist als validiertes Pydantic-Objekt beschrieben und wird Schritt für Schritt im
 Audit-Trail des Cubes protokolliert — ein Ergebnis lässt sich Monate später exakt reproduzieren.
 
+### Matrix-Subtraktion und Deconvolution
+
+```python
+from pyrecycle_analytics.matrix.polyolefin import subtract_polymer_matrix
+from pyrecycle_analytics.deconvolution import DeconvolutionConfig, resolve_pyrogram
+
+matrix = subtract_polymer_matrix(cube)
+matrix.explained_fraction        # Signalanteil, den die Homologenreihe erklärt
+matrix.residual                  # PyrogramDataCube ohne die Matrix
+matrix.model.detection.apex_times_s   # Kamm-Positionen — die Kováts-Leiter für MS3
+matrix.diagnostics["n_clusters"]      # erkannte Kettenlängen, kontaminierte Positionen …
+
+report = resolve_pyrogram(cube, DeconvolutionConfig())
+report.result.S                  # Reinspektren, L1-normiert
+report.result.areas              # Fläche je aufgelöster Komponente
+report.result.apex_times         # Retentionszeit je Komponente
+report.result.lack_of_fit        # LOF in %
+```
+
+`resolve_pyrogram` zieht die Matrix zuerst ab und legt MCR-ALS auf das Residuum — nicht umgekehrt.
+Die Begründung steht gemessen in [ROADMAP.md](ROADMAP.md), Befund 2.
+
+### Identifikation, Degradation, Pass
+
+```python
+from pyrecycle_analytics.library.repository import MarkerLibrary
+from pyrecycle_analytics.library.retention_index import calibrate_from_comb
+from pyrecycle_analytics.identification import identify_compounds, identify_polymers
+from pyrecycle_analytics.degradation import compute_degradation_indices
+
+library = MarkerLibrary.in_memory()      # oder MarkerLibrary(create_library("postgresql://…"))
+
+# Der Kamm liefert die Abstände, nicht die absoluten Kettenlängen. Ist die
+# Kohlenstoffzahl des ersten Clusters bekannt, wird die Leiter darauf verankert;
+# sonst wird sie über die Totzeit geschätzt und der Pass weist das aus.
+ladder = calibrate_from_comb(matrix.model.detection.apex_times_s, first_carbon_number=8)
+
+hits = identify_compounds(report.result, library, calibration=ladder)
+polymers = identify_polymers(hits, library)
+indices = compute_degradation_indices(cube, matrix_model=matrix.model)
+indices.branching_index          # iso-Alkene / n-Alkane — trennt PP, LDPE und HDPE
+```
+
+Die Bibliothek liegt in `library/reference_data.py` und ist **nicht** aus
+`tests/reference_spectra.py` abgeleitet. Ein Test prüft aktiv, dass beide Tabellen auseinandergehen
+— sonst validierte sich die Identifikation gegen ihre eigene Quelle.
+
 ---
 
 ## 5. Bewusste Entwurfsentscheidungen
@@ -229,9 +325,112 @@ Algorithmus finden kann.
 nicht per `hash()` — Pythons String-Hashing ist prozessweise gesalzen, ein damit erzeugter
 Benchmark wäre nicht regenerierbar.
 
+**Die Matrix wird vor der Kurvenauflösung abgezogen, nicht danach.** Der ursprüngliche Auftrag
+nennt die umgekehrte Reihenfolge. Gemessen sinkt die Komponentenzahl je koeluierendem Fenster durch
+den Abzug von median 7 (max 12) auf median 3, und rund ein Drittel der Fenster wird ganz leer.
+MCR-ALS mit 7–12 nahezu kollinearen Komponenten ist nicht durch Nichtnegativität und Unimodalität
+einzugrenzen; mit 3 ist es Routine. Begründung und Zahlen: [ROADMAP.md](ROADMAP.md), Befund 2.
+
+**Der Säure-Kanal ist m/z 60, nicht m/z 73.** m/z 73 ist zwar ein Fragment kurzkettiger Säuren,
+aber auch das dominante Siloxan-Ion des Säulenblutens. Ein darauf gestützter Säureanteil misst im
+Wesentlichen die Säule. Das kostet Empfindlichkeit und ist die einzige Wahl, die eine Kennzahl
+liefert, die tatsächlich die Probe beschreibt.
+
+**Die Kontaminationsreparatur vergleicht entlang der Kohlenstoffachse, nicht über den Cosinus.**
+Ein Clusterspektrum, das einen koeluierenden Analyten enthält, hebt diesen beim Abzug fast exakt
+auf — ohne Reparatur bleiben von ε-Caprolactam 2 % übrig, mit 88 %. Eine cosinusbasierte Prüfung
+löste das nicht, weil das kontaminierte Spektrum den Nachbarn immer noch ähnlich sieht. Verglichen
+wird deshalb kanalweise gegen dieselbe Triplett-Position der Nachbarketten.
+
+**Nicht zugeordnetes Signal wird ausgewiesen, nicht verteilt.** Und der Kalibrierstatus eines
+Passes ist immer der schwächste seiner Fraktionen: eine gut belegte Fraktion darf eine schlecht
+belegte nicht aufwerten. Beides ist im Schema erzwungen, nicht nur in der Darstellung.
+
 ---
 
-## 6. Tests
+## 6. Was die Kette leistet, und wo sie aufhört
+
+Alle Zahlen hier sind auf dem eigenen Benchmark gemessen (Seed 11, Vollauflösung), nicht geschätzt.
+Die Messskripte sind der Bewertungs-Harness aus `validation/`; die Tests halten die Aussagen fest,
+damit sie bei einer Änderung nicht stillschweigend verfallen.
+
+### Deconvolution gegen die triviale Vergleichsbasis
+
+Ohne diesen Vergleich wäre nicht belegbar, dass MCR-ALS überhaupt etwas verbessert. Die Basis ist
+Peakerkennung auf dem TIC mit Spektrum am Apex — was ein Anwender ohne Chemometrie täte.
+
+| Rezeptur | Verfahren | Recall | Cosinus (med) | Flächenfehler (med) | LOF % | R² |
+|---|---|---|---|---|---|---|
+| `coelution_stress` | naiv | 0,16 | 0,983 | 6,93 | 128,6 | −0,88 |
+| `coelution_stress` | **MCR-ALS** | **0,34** | 0,942 | **0,82** | **87,6** | **0,13** |
+| `pcr_mixed_polyolefin` | naiv | 0,16 | 0,948 | 5,05 | 134,0 | −1,00 |
+| `pcr_mixed_polyolefin` | **MCR-ALS** | **0,40** | 0,947 | **0,75** | **80,5** | **0,28** |
+| `trace_pet_in_polyolefin` | naiv | 0,15 | 0,989 | 4,07 | 122,7 | −0,67 |
+| `trace_pet_in_polyolefin` | **MCR-ALS** | **0,35** | 0,924 | **0,93** | **94,3** | **0,01** |
+
+Der hohe Cosinus der naiven Basis ist kein Erfolg: sie findet fast nur die großen, gut getrennten
+Alkan-Peaks, deren Spektrum am Apex ohnehin sauber ist. Der Flächenfehler von 4 bis 7 (also 400 bis
+700 %) zeigt, was in den koeluierenden Fenstern passiert. Der Recall bleibt auch mit MCR-ALS bei
+0,34–0,40, und das ist erwartet: die Homologenreihe wird bewusst als strukturiertes Ganzes
+abgezogen statt als 120 Einzelkomponenten aufgelöst.
+
+### Die Zahl, auf die es ankommt: benannte Marker
+
+| Rezeptur | naiv | MCR-ALS |
+|---|---|---|
+| `coelution_stress` | 7 / 12 | **9 / 12** |
+| `pcr_mixed_polyolefin` | 6 / 24 | **12 / 24** |
+| `trace_pet_in_polyolefin` | 0 / 6 | **1 / 6** |
+
+Auf `pcr_mixed_polyolefin` findet MCR-ALS unter anderem ε-Caprolactam (0,95 % Signalanteil,
+Cosinus 0,89), Benzoesäure (0,69 %, 0,99), Divinylterephthalat (0,19 %, 0,99) und DEHP (0,15 %,
+0,99) — alle vier findet die naive Basis nicht, weil sie unter einem Alkan-Cluster liegen.
+
+**Die Nachweisgrenze liegt gemessen bei etwa 0,05 % Signalanteil.** Darunter wird nichts mehr
+gefunden: Naphthalin (0,02 %), das Benzotriazol-Fragment (0,02 %), Chlorbenzol (0,01 %) und BHT
+(0,04 %) bleiben in `pcr_mixed_polyolefin` unerkannt.
+Auf `trace_pet_in_polyolefin` — PET bei 0,2 % Massenanteil, seine
+Marker damit bei 0,03 bis 0,11 % des Signals — wird **kein einziger PET-Marker** zurückgewonnen.
+Das verfehlt das in der Roadmap gesetzte Ziel („PET-Markerfläche ±25 %") deutlich, und die Zahl
+steht hier, statt das Ziel nachträglich abzusenken.
+
+### Rezyklat-Pass gegen die bekannte Rezeptur
+
+| Rezeptur | Wahrheit (Flächenanteil) | Pass | nicht zugeordnet |
+|---|---|---|---|
+| `virgin_pp` | PP 100 % | PP 75,3 % (high) | 24,7 % |
+| `pcr_ps_with_traces` | PS 92,8 %, PE-HD 4,6 %, PP 2,2 % | PS 79,9 % (high), PE-LD 7,1 % (medium) | 13,0 % |
+| `trace_pet_in_polyolefin` | PE-LD 95,0 %, PP 4,8 %, PET 0,2 % | PE-LD 74,1 % (high), PP 0,1 % (indicative) | 25,8 % |
+| `pcr_mixed_polyolefin` | PE-LD 59,6 %, PP 31,2 %, PS 6,2 %, PET 1,3 %, PA6 1,0 % | PE-LD 45,5 % (high), PP 5,5 % (indicative), PS 4,1 % (medium) | 44,9 % |
+
+Drei Dinge sind daran abzulesen:
+
+1. **Die Rangfolge stimmt, die absolute Höhe nicht.** Der Pass unterschätzt jede Fraktion, weil
+   nicht zugeordnetes Signal ausgewiesen und **nicht** auf die erkannten Polymere verteilt wird.
+   Eine Verteilung würde jede Zahl proportional zu dem aufblähen, was die Methode nicht erklären
+   konnte — das wäre die unehrlichere Darstellung.
+2. **PE und PP in derselben Probe sind die eigentliche Schwäche.** Beide liefern denselben
+   Alkan/Alken-Kamm; die Trennung läuft allein über den Verzweigungsindex, der einen Mischkamm zu
+   einem einzigen Polymer erklärt. Auf `pcr_mixed_polyolefin` (PP 31 % wahr) landet PP bei 5,5 %
+   und ist als `indicative` gekennzeichnet. In der reinen Probe (`virgin_pp`) ist die Zuordnung
+   korrekt. Eine echte Ko-Quantifizierung im Kamm ist offen.
+3. **Die Sortenangabe bei PE ist ein Hinweis, kein Befund.** Auf `pcr_ps_with_traces` meldet der
+   Pass PE-LD, wahr ist PE-HD — der Anteil (7,1 % gegen 6,8 % wahr) stimmt, die Sorte nicht. Der
+   Pass markiert das entsprechend.
+
+### Die Verankerung der Retentionsskala
+
+Die Kováts-Leiter wird aus dem Alkan-Kamm der Probe selbst gebaut, nicht aus einem separaten
+Standard. Auf dem synthetischen Benchmark weicht sie im Median um rund 140 RI-Einheiten von den
+tabellierten Werten ab, im Extremfall um über 1000. Das ist **kein Fehler der Verankerung, sondern
+ein Konstruktionskonflikt des Generators**: er setzt Marker gezielt auf Alkan-Cluster, um Koelution
+zu erzeugen — genau dadurch kann ihre Retentionszeit nicht gleichzeitig Kováts-konsistent sein. Ein
+Test hält die Abweichung fest, damit sie nicht stillschweigend verschwindet und nicht mit einer
+Schwäche der RI-Logik verwechselt wird. Auf echten Messungen gilt die Einschränkung nicht.
+
+---
+
+## 7. Tests
 
 ```bash
 pytest                      # alle Tests
@@ -240,7 +439,7 @@ pytest --cov=src/pyrecycle_analytics --cov=data_schemas
 ruff check . && mypy        # Lint und Typprüfung: sauber
 ```
 
-632 Tests, 96 % Abdeckung. Die Tests prüfen zwei Ebenen:
+865 Tests. Sie prüfen drei Ebenen:
 
 * **Mathematischer Vertrag** — exakte Bilinearität, Flächen­normierung der EMG über den gesamten
   Tailing-Bereich, L1-normierte Spektren, prozessübergreifende Reproduzierbarkeit,
@@ -249,30 +448,46 @@ ruff check . && mypy        # Lint und Typprüfung: sauber
   verzweigt wie HDPE, PP wird vom C9-Trimer dominiert, Alterung hebt Carbonyl-Gehalt und
   iso-Alken-Anteil, die Styrol-Triade liegt bei 100 : 12 : 6, und der PET-Spurenmarker ist im TIC
   unsichtbar, auf m/z 105 aber klar detektierbar.
+* **Ehrlichkeit der Aussage** — ein unkalibrierter Lauf darf nirgends als kalibriert erscheinen;
+  ohne Kalibrierung wird kein Unsicherheitsintervall ausgewiesen; nicht zugeordnetes Signal wird
+  ausgewiesen statt verteilt und die Summe der Anteile kann 100 % nicht überschreiten;
+  „detektiert" wird nie zu „konform"; und die Bibliothek unter `library/` ist nachweislich nicht
+  identisch mit `tests/reference_spectra.py`.
 
-Der letzte Punkt ist Absicht: Wenn ein Benchmark einfacher wäre als die Realität, würde MCR-ALS
-ihn aus den falschen Gründen bestehen. Mehrere Tests sichern deshalb explizit ab, dass die
-*Schwierigkeit* vorhanden ist.
+Die letzten beiden Punkte sind Absicht. Wenn ein Benchmark einfacher wäre als die Realität, würde
+MCR-ALS ihn aus den falschen Gründen bestehen — mehrere Tests sichern deshalb explizit ab, dass die
+*Schwierigkeit* vorhanden ist. Und da das Ergebnis ein Dokument mit dem Wort „Pass" im Namen ist,
+sind die Einschränkungen selbst testpflichtig, nicht nur die Zahlen.
 
 ---
 
-## 7. Nächste Meilensteine
+## 8. Stand und was offen bleibt
 
-Ausführliche Planung mit gemessenen Zielwerten, Akzeptanzkriterien und Risiken:
-**[ROADMAP.md](ROADMAP.md)**. Kurzfassung:
+Die Kette MS1 → MS4 ist vollständig; die ausführliche Planung mit den gemessenen Ausgangszahlen,
+Akzeptanzkriterien und Risiken steht in **[ROADMAP.md](ROADMAP.md)**.
 
-**MS2 — Deconvolution-Engine.** Zuerst `subtract_polymer_matrix(...)` (Abzug der
-Alkan/Alken-Homologenreihen), **dann** MCR-ALS auf dem Residuum — nicht umgekehrt. Die Messung auf
-dem eigenen Benchmark zeigt, warum: die Subtraktion senkt die Zahl der Komponenten je
-koeluierendem Fenster von median 7 (max 12) auf median 3, und macht rund ein Drittel der Fenster
-ganz leer. Erst damit wird die Kurvenauflösung ein lösbares Problem. Bewertung gegen `sample.C` /
-`sample.S`; Zielfall ist `trace_pet_in_polyolefin`.
+**Umgesetzt.** Ingestion (ANDI-MS, mzML/mzXML/mzData) mit Provenienz · kanalweises Preprocessing ·
+Bewertungs-Harness mit trivialer Vergleichsbasis · Fensterbildung und Rangschätzung mit
+Divergenzwarnung · Polyolefin-Matrixmodell und `subtract_polymer_matrix` · MCR-ALS mit
+SIMPLISMA-Start, Nichtnegativität und Unimodalität · Marker-Bibliothek (SQLAlchemy 2.0) ·
+Kováts-Verankerung aus dem Kamm der Probe · Identifikation mit Konfidenz · Degradations-Indizes ·
+Rezyklat-Pass als JSON/HTML/PDF · FastAPI-Dienst.
 
-**MS3 — Marker-Bibliothek & Degradations-Index.** Relationales Schema (SQLAlchemy) für
-quantitative Marker-Triaden; `DegradationEngine` auf Basis von iso-Alken/n-Alkan-Verhältnis und
-Carbonyl-Markern. Die Referenzspektren unter `tests/` bleiben bewusst getrennt von der
-Identifikationsbibliothek, damit diese nicht gegen ihre eigene Quelle validiert wird.
+**Bewusst nicht umgesetzt.** MS2.4 (PARAFAC2-Mehrlaufauswertung, `generate_series()`) war von
+Anfang an als optional geplant und ist für einen Einzellauf-Pass nicht erforderlich. Die
+Voraussetzung dafür steht im Generator bereit.
 
-**MS4 — Digitaler Rezyklat-Pass.** FastAPI-Endpunkt mit Hauptfraktionen in %, REACH-Markern sowie
-Degradations- und Verzweigungsindex. Die Response-Faktor-Korrektur aus MS1 ist Voraussetzung für
-belastbare Prozentangaben.
+**Offene Punkte, nach Wirkung sortiert.**
+
+1. **PE/PP-Ko-Quantifizierung im gemeinsamen Kamm** — der größte Einzelfehler des Passes
+   (siehe Abschnitt 6). Ein Ansatz wäre, den Kamm in zwei Reihen mit eigenen Amplituden zu
+   zerlegen, statt ihn über einen skalaren Verzweigungsindex einem Polymer zuzuschlagen.
+2. **Nachweisgrenze unter 0,05 % Signalanteil** — betrifft PET in stark polyolefindominierten
+   Rezyklaten und die meisten Additivmarker. Zielionen-gestützte Fenster statt TIC-gestützter
+   wären der nächste Hebel.
+3. **Persistenz der Analysen** — Ergebnisse liegen im API-Prozess, ein Neustart verliert sie. Das
+   Bibliotheksschema hat bereits die Tabellen dafür.
+4. **Streamlit-Oberfläche** — zeigt bislang Import, Sichtung und Vorverarbeitung; aufgelöste
+   Profile, Identifikationstabelle und Pass-Vorschau fehlen noch.
+5. **Echte Kalibrierung** — solange keine gravimetrischen Referenzmischungen unter derselben
+   Methode gemessen wurden, bleibt jeder Pass `response-corrected` und sagt das auch.

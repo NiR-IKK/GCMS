@@ -35,8 +35,18 @@ dependencies = [
 # Raw-data ingestion for vendor-neutral MS formats (mzML / mzXML / mzData).
 # ANDI-MS (.CDF) is read through scipy.io.netcdf_file and needs no extra package.
 io = ["pyopenms>=3.0"]
-api = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "pydantic-settings>=2.2"]
+# python-multipart is what parses the upload body; without it POST /samples fails
+# at request time, not at import time, so it belongs in the extra rather than in
+# a note somewhere.
+api = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic-settings>=2.2",
+    "python-multipart>=0.0.9",
+    "pyrecycle-analytics[db]",
+]
 db = ["SQLAlchemy>=2.0", "alembic>=1.13"]
+report = ["weasyprint>=61"]
 ui = ["streamlit>=1.33", "plotly>=5.20"]
 dev = [
     "pytest>=8.0",
@@ -45,7 +55,7 @@ dev = [
     "mypy>=1.9",
 ]
 all = [
-    "pyrecycle-analytics[io,api,db,ui,dev]",
+    "pyrecycle-analytics[io,api,db,report,ui,dev]",
 ]
 
 [tool.setuptools.packages.find]
@@ -81,6 +91,9 @@ python_version = "3.11"
 warn_unused_ignores = true
 ignore_missing_imports = true
 packages = ["pyrecycle_analytics", "data_schemas"]
+# An editable install points at src/ through a finder hook that mypy does not
+# follow, so a bare `mypy` cannot locate the package without this.
+mypy_path = "src"
 # Without this, mypy treats every Pydantic field as a required constructor
 # argument and reports a false error at every model instantiation.
 plugins = ["pydantic.mypy"]
