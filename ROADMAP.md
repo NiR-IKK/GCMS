@@ -1,6 +1,6 @@
 # Roadmap Meilenstein 2 – 4
 
-> **Stand: umgesetzt.** MS2.0 bis MS4.4 sind gebaut, 877 Tests laufen grün. Der Plan bleibt
+> **Stand: umgesetzt.** MS2.0 bis MS4.4 sind gebaut, 905 Tests laufen grün. Der Plan bleibt
 > unverändert stehen — was daraus geworden ist, steht in [Abgleich: Plan gegen Ergebnis](#abgleich-plan-gegen-ergebnis)
 > Zeile für Zeile daneben, einschließlich der drei Akzeptanzkriterien, die **nicht** erreicht
 > wurden. Ein nachträglich an das Ergebnis angepasster Plan wäre wertlos.
@@ -433,7 +433,8 @@ Kováts-Leiter für MS3.2 **und** die Kettenlängen- und Verzweigungsstatistik f
 Arbeitspaket aus MS2 fertig wird, dann dieses.
 
 Rückblickend hat sich das bestätigt, und zwar stärker als erwartet: MS2.2 liefert am Ende auch die
-Polyolefin-Evidenz für den Pass selbst. Weil die Matrix vor der Auflösung abgezogen wird, fände die
+Polyolefin-Evidenz für den Pass selbst — und, nachgereicht, die Aufteilung des Kamms zwischen PE
+und PP (`matrix/backbone.py`), die den größten Einzelfehler des Passes behoben hat. Weil die Matrix vor der Auflösung abgezogen wird, fände die
 Identifikation PE und PP sonst nur noch als Rest — auf `pcr_mixed_polyolefin` wurde PP zunächst mit
 2,3 % gegen 32 % Wahrheit gemeldet. Der Kamm-Anteil wird deshalb aus dem Matrixmodell in den Pass
 zurückgeführt (`MatrixPolyolefinEvidence`). Das ist keine nachträgliche Korrektur, sondern die

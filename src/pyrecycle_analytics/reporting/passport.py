@@ -40,6 +40,7 @@ from pyrecycle_analytics.identification.engine import (
     PolymerFinding,
 )
 from pyrecycle_analytics.library.repository import MarkerLibrary
+from pyrecycle_analytics.matrix.backbone import BackboneSplit
 from pyrecycle_analytics.reporting.reach import NON_GC_AMENABLE_NOTE, REACH_WATCHLIST
 
 __all__ = ["MatrixPolyolefinEvidence", "PassportInputs", "build_passport"]
@@ -62,15 +63,27 @@ class MatrixPolyolefinEvidence:
     a PP-dominated matrix produces far more branched-alkene signal than any
     polyethylene.
 
+    Where two polyolefins share the comb, the branching index alone cannot divide
+    them: it is one number for the whole comb, and a PE/PP blend produces an
+    intermediate value that reads as a single intermediate polymer. Measured, that
+    put polypropylene at 5.5 % against a true 31 %. Supplying ``split`` — an
+    unmixing against virgin reference runs — replaces the single assignment with
+    the actual division. Without references the old behaviour stands, and the
+    passport says the polyolefin fraction is unsplit.
+
     Attributes:
         signal_fraction: Share of the run's total signal attributed to the comb.
-        branching_index: Iso-alkene over n-alkane signal, deciding the grade.
+        branching_index: Iso-alkene over n-alkane signal, deciding the grade when
+            no reference split is available.
         n_clusters: Homologues found, reported as evidence strength.
+        split: Division of the comb between reference materials, when virgin
+            references were supplied.
     """
 
     signal_fraction: float
     branching_index: float
     n_clusters: int
+    split: BackboneSplit | None = None
 
     # Measured on the benchmark: HDPE 0.137, LDPE 0.186, PP 1.239. The gap between
     # any polyethylene and polypropylene is nearly an order of magnitude, so the
@@ -81,25 +94,85 @@ class MatrixPolyolefinEvidence:
 
     @property
     def polymer(self) -> PolymerClass:
-        """Grade implied by the branching index."""
+        """Grade of the comb, or its dominant material when split."""
+        if self.split is not None:
+            return self.split.dominant
         if self.branching_index >= self.PP_BRANCHING_THRESHOLD:
             return PolymerClass.PP
         if self.branching_index >= self.LDPE_BRANCHING_THRESHOLD:
             return PolymerClass.PE_LD
         return PolymerClass.PE_HD
 
+    # A reference material that takes less than this share of the comb is below
+    # what the unmixing resolves; reporting it would put a polymer on the passport
+    # on the strength of fitting noise. Dropped shares are folded back into the
+    # remaining ones so the polyolefin total stays intact.
+    MIN_REPORTED_SHARE = 0.01
+
+    def contributions(self) -> list[tuple[PolymerClass, float, bool]]:
+        """One entry per polyolefin the comb is attributed to.
+
+        Collinear reference materials are combined rather than reported side by
+        side. Two spectra a cosine of 0.999 apart carry almost no independent
+        information, and printing them as separate percentages would dress a
+        rounding difference up as a measurement.
+
+        Returns:
+            ``(polymer, share of the comb, split into more than one material)``.
+        """
+        if self.split is None:
+            return [(self.polymer, 1.0, False)]
+
+        shares = dict(self.split.shares)
+        for group, combined in self.split.merged:
+            present = [polymer for polymer in group if polymer in shares]
+            if len(present) < 2:
+                continue
+            label = max(present, key=lambda polymer: shares[polymer])
+            for polymer in present:
+                shares.pop(polymer)
+            shares[label] = combined
+
+        kept = {
+            polymer: share
+            for polymer, share in shares.items()
+            if share >= self.MIN_REPORTED_SHARE
+        }
+        if not kept:  # pragma: no cover - only when the comb is pure noise
+            return [(self.polymer, 1.0, True)]
+
+        total = sum(kept.values())
+        return [
+            (polymer, share / total, True)
+            for polymer, share in sorted(kept.items(), key=lambda item: -item[1])
+        ]
+
     @property
     def grade_note(self) -> str:
-        """How firm the grade assignment is."""
+        """How firm the assignment is."""
+        if self.split is not None:
+            listed = ", ".join(
+                f"{polymer} {100.0 * share:.1f} %"
+                for polymer, share, _ in self.contributions()
+            )
+            return (
+                f"the polyolefin comb was divided against virgin references "
+                f"({self.split.endmember_source}): {listed}. "
+                f"{self.split.residual_fraction:.1%} of the comb spectrum is not "
+                "explained by those references."
+            )
         if self.branching_index >= self.PP_BRANCHING_THRESHOLD:
             return (
                 f"branching index {self.branching_index:.2f} is far above any "
-                "polyethylene; assigned to polypropylene"
+                "polyethylene; assigned to polypropylene. No virgin references "
+                "were supplied, so the comb is reported as one polymer — a PE/PP "
+                "blend would read as a single intermediate grade"
             )
         return (
             f"branching index {self.branching_index:.2f} indicates polyethylene; "
             "the LD/HD boundary is narrow, so treat the grade as a hint and the "
-            "polyolefin total as the firm figure"
+            "polyolefin total as the firm figure. No virgin references were "
+            "supplied, so a PE/PP blend would read as one intermediate grade"
         )
 
 
@@ -273,35 +346,59 @@ def build_passport(
     # and what the resolved components can account for is scaled into the rest.
     matrix = inputs.matrix_polyolefin
     matrix_share = 0.0
+    matrix_polymers: set[PolymerClass] = set()
     fractions: list[PolymerFraction] = []
     if matrix is not None and matrix.signal_fraction > 0.0:
-        factor = library.response_factor(
-            str(matrix.polymer),
-            pyrolysis_temperature_c=inputs.acquisition.pyrolysis.temperature_c,
-        )
-        matrix_share = min(
-            100.0 * matrix.signal_fraction / max(factor, 1e-9), 100.0
-        )
-        fractions.append(
-            PolymerFraction(
-                polymer=matrix.polymer,
-                share_percent=matrix_share,
-                calibration_status=status,
-                confidence=(
-                    ConfidenceLevel.HIGH if matrix.n_clusters >= 8 else ConfidenceLevel.MEDIUM
-                ),
-                marker_pattern="polyolefin homologous series",
-                markers_found=(f"n-alkane comb, {matrix.n_clusters} homologues",),
-                markers_expected=1,
-                uncertainty_percent=(
-                    round(matrix_share * 0.25, 4) if calibrated else None
-                ),
+        # Response-correct each polyolefin separately. With the comb reported as
+        # one polymer this made no difference; split, it does — polypropylene and
+        # polyethylene do not give the same GC-amenable yield per unit mass.
+        corrected: list[tuple[PolymerClass, float, bool]] = []
+        for polymer, share, was_split in matrix.contributions():
+            factor = library.response_factor(
+                str(polymer),
+                pyrolysis_temperature_c=inputs.acquisition.pyrolysis.temperature_c,
             )
-        )
+            corrected.append(
+                (polymer, matrix.signal_fraction * share / max(factor, 1e-9), was_split)
+            )
+
+        # Cap the polyolefin block as a whole, not each part: capping the parts
+        # would silently change their ratio to one another.
+        block = sum(value for _, value, _ in corrected)
+        scale = min(1.0, 1.0 / block) if block > 1.0 else 1.0
+        matrix_share = 100.0 * block * scale
+
+        for polymer, value, was_split in corrected:
+            share = 100.0 * value * scale
+            if share <= 0.0:
+                continue
+            matrix_polymers.add(polymer)
+            fractions.append(
+                PolymerFraction(
+                    polymer=polymer,
+                    share_percent=share,
+                    calibration_status=status,
+                    confidence=(
+                        ConfidenceLevel.HIGH
+                        if matrix.n_clusters >= 8
+                        else ConfidenceLevel.MEDIUM
+                    ),
+                    marker_pattern=(
+                        "polyolefin homologous series, split against virgin references"
+                        if was_split
+                        else "polyolefin homologous series"
+                    ),
+                    markers_found=(f"n-alkane comb, {matrix.n_clusters} homologues",),
+                    markers_expected=1,
+                    uncertainty_percent=(
+                        round(share * 0.25, 4) if calibrated else None
+                    ),
+                )
+            )
 
     remaining = max(0.0, 100.0 - matrix_share)
     for finding in inputs.polymer_findings:
-        if matrix is not None and finding.polymer is matrix.polymer:
+        if finding.polymer in matrix_polymers:
             continue
         share = shares.get(finding.polymer, 0.0) * attributable * remaining
         single_marker = len(finding.members_found) == 1

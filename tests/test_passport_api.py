@@ -27,9 +27,14 @@ from pyrecycle_analytics.api import create_app
 from pyrecycle_analytics.deconvolution import DeconvolutionConfig
 from pyrecycle_analytics.ingestion import write_andi_cdf
 from pyrecycle_analytics.library import MarkerLibrary
+from pyrecycle_analytics.matrix.backbone import BackboneSplit
 from pyrecycle_analytics.preprocessing import PreprocessingConfig
 from pyrecycle_analytics.reporting import analyse_pyrogram, render_html, render_pdf
-from pyrecycle_analytics.reporting.passport import MatrixPolyolefinEvidence
+from pyrecycle_analytics.reporting.passport import (
+    MatrixPolyolefinEvidence,
+    PassportInputs,
+    build_passport,
+)
 from tests.synthetic_data import RECIPES, SyntheticPyrogram, SyntheticPyrogramGenerator
 
 
@@ -442,3 +447,129 @@ def _fraction(
         marker_pattern="unit",
         markers_expected=2,
     )
+
+
+class TestSplitPolyolefinFractions:
+    """Der Pass mit aufgeteiltem Kamm.
+
+    Ohne Referenzen meldet der Pass den Kamm als ein Polymer; ein PE/PP-Blend
+    liest sich dann als eine mittlere Sorte. Gemessen setzte das PP auf 11 % des
+    Polyolefins gegen 34 % Wahrheit. Mit Referenzen wird der Kamm entmischt.
+    """
+
+    @staticmethod
+    def _evidence(shares: dict, merged=(), residual: float = 0.05):  # noqa: ANN001, ANN205
+        return MatrixPolyolefinEvidence(
+            signal_fraction=0.6,
+            branching_index=0.25,
+            n_clusters=12,
+            split=BackboneSplit(
+                shares=shares,
+                residual_fraction=residual,
+                endmember_source="test references",
+                merged=merged,
+            ),
+        )
+
+    def test_without_a_split_the_comb_stays_one_polymer(self) -> None:
+        evidence = MatrixPolyolefinEvidence(
+            signal_fraction=0.6, branching_index=0.25, n_clusters=12
+        )
+        assert evidence.contributions() == [(PolymerClass.PE_LD, 1.0, False)]
+
+    def test_a_split_produces_one_entry_per_material(self) -> None:
+        evidence = self._evidence(
+            {PolymerClass.PE_LD: 0.65, PolymerClass.PP: 0.35}
+        )
+        contributions = evidence.contributions()
+        assert [polymer for polymer, _, _ in contributions] == [
+            PolymerClass.PE_LD,
+            PolymerClass.PP,
+        ]
+        assert sum(share for _, share, _ in contributions) == pytest.approx(1.0)
+        assert all(was_split for _, _, was_split in contributions)
+
+    def test_inseparable_grades_are_combined_not_listed_side_by_side(self) -> None:
+        """Kosinus 0,999 zwischen HDPE und LDPE — zwei Zahlen wären Scheingenauigkeit."""
+        evidence = self._evidence(
+            {PolymerClass.PE_HD: 0.25, PolymerClass.PE_LD: 0.40, PolymerClass.PP: 0.35},
+            merged=(((PolymerClass.PE_HD, PolymerClass.PE_LD), 0.65),),
+        )
+        contributions = evidence.contributions()
+        assert len(contributions) == 2
+        shares = {polymer: share for polymer, share, _ in contributions}
+        assert shares[PolymerClass.PE_LD] == pytest.approx(0.65)
+        assert shares[PolymerClass.PP] == pytest.approx(0.35)
+
+    def test_a_share_below_the_resolution_is_not_reported(self) -> None:
+        """Sonst stünde ein Polymer im Pass, weil die Anpassung Rauschen erklärt hat."""
+        evidence = self._evidence(
+            {PolymerClass.PE_LD: 0.995, PolymerClass.PP: 0.005}
+        )
+        contributions = evidence.contributions()
+        assert [polymer for polymer, _, _ in contributions] == [PolymerClass.PE_LD]
+        assert contributions[0][1] == pytest.approx(1.0)
+
+    def test_the_note_names_the_reference_source(self) -> None:
+        evidence = self._evidence(
+            {PolymerClass.PE_LD: 0.65, PolymerClass.PP: 0.35}, residual=0.07
+        )
+        note = evidence.grade_note
+        assert "test references" in note
+        assert "7.0%" in note
+
+    def test_the_unsplit_note_warns_that_a_blend_reads_as_one_grade(self) -> None:
+        """Die Einschränkung muss im Pass stehen, nicht nur im Quelltext."""
+        evidence = MatrixPolyolefinEvidence(
+            signal_fraction=0.6, branching_index=0.25, n_clusters=12
+        )
+        assert "blend" in evidence.grade_note
+
+    def test_the_passport_carries_both_polyolefins(
+        self, mixed_sample: SyntheticPyrogram, library: MarkerLibrary
+    ) -> None:
+        """Der eigentliche Zweck, am fertigen Dokument geprüft."""
+        passport = build_passport(
+            PassportInputs(
+                sample=mixed_sample.cube.metadata.sample,
+                acquisition=mixed_sample.cube.metadata.acquisition,
+                polymer_findings=[],
+                compound_identifications=[],
+                total_signal_area=1.0,
+                matrix_polyolefin=self._evidence(
+                    {PolymerClass.PE_LD: 0.65, PolymerClass.PP: 0.35}
+                ),
+            ),
+            library,
+        )
+        reported = {
+            fraction.polymer: fraction.share_percent
+            for fraction in passport.polymer_fractions
+        }
+        assert PolymerClass.PE_LD in reported
+        assert PolymerClass.PP in reported
+        assert reported[PolymerClass.PE_LD] > reported[PolymerClass.PP] > 0.0
+        assert all(
+            "split against virgin references" in fraction.marker_pattern
+            for fraction in passport.polymer_fractions
+        )
+
+    def test_split_fractions_never_exceed_the_comb(
+        self, mixed_sample: SyntheticPyrogram, library: MarkerLibrary
+    ) -> None:
+        """Die Response-Korrektur je Polymer darf den Block nicht aufblähen."""
+        passport = build_passport(
+            PassportInputs(
+                sample=mixed_sample.cube.metadata.sample,
+                acquisition=mixed_sample.cube.metadata.acquisition,
+                polymer_findings=[],
+                compound_identifications=[],
+                total_signal_area=1.0,
+                matrix_polyolefin=self._evidence(
+                    {PolymerClass.PE_LD: 0.5, PolymerClass.PP: 0.5}
+                ),
+            ),
+            library,
+        )
+        assert sum(f.share_percent for f in passport.polymer_fractions) <= 100.0
+        assert passport.unassigned_share_percent >= 0.0

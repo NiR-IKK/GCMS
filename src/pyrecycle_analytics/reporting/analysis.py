@@ -37,6 +37,12 @@ from pyrecycle_analytics.library.retention_index import (
     RetentionIndexError,
     calibrate_from_comb,
 )
+from pyrecycle_analytics.matrix.backbone import (
+    BackboneEndmembers,
+    BackboneSplit,
+    BackboneSplitError,
+    split_backbone,
+)
 from pyrecycle_analytics.matrix.polyolefin import (
     MatrixSubtractionError,
     MatrixSubtractionResult,
@@ -96,6 +102,7 @@ def analyse_pyrogram(
     first_carbon_number: int | None = None,
     degradation_reference: DegradationIndices | None = None,
     reference_sample_id: str | None = None,
+    backbone_endmembers: BackboneEndmembers | None = None,
     calibrated: bool = False,
 ) -> AnalysisResult:
     """Run the full chain and produce a recyclate passport.
@@ -112,6 +119,10 @@ def analyse_pyrogram(
             polymer. Without them the degradation figures are reported but marked
             as not interpretable.
         reference_sample_id: Identity of that reference, for the passport.
+        backbone_endmembers: Comb spectra of virgin polyolefins measured under
+            the same method. Without them the polyolefin comb is reported as a
+            single polymer, which understates polypropylene in a PE/PP blend by
+            a wide margin — see :class:`~pyrecycle_analytics.matrix.BackboneSplit`.
         calibrated: Whether gravimetric reference blends back the percentages.
 
     Returns:
@@ -159,11 +170,24 @@ def analyse_pyrogram(
     except ValueError as error:
         warnings.append(f"degradation indices not computed: {error}")
 
+    backbone_split: BackboneSplit | None = None
+    if matrix_model is not None and backbone_endmembers is not None:
+        try:
+            backbone_split = split_backbone(
+                matrix_model, backbone_endmembers, preprocessed.mz_axis
+            )
+        except BackboneSplitError as error:
+            warnings.append(
+                f"polyolefin comb not split ({error}); it is reported as a single "
+                "polymer, which understates the minor polyolefin in a blend"
+            )
+
     if subtraction is not None and matrix_model is not None and degradation is not None:
         matrix_evidence = MatrixPolyolefinEvidence(
             signal_fraction=subtraction.explained_fraction,
             branching_index=degradation.branching_index,
             n_clusters=matrix_model.detection.n_clusters,
+            split=backbone_split,
         )
 
     provenance = AnalysisProvenance(

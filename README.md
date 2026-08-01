@@ -8,7 +8,7 @@ Pyrolysaten auf polymere Hauptkomponenten, Additive und Degradationsgrade.
 > **Status: Meilensteine 1 bis 4 abgeschlossen.** Von der Rohdatei bis zum Rezyklat-Pass läuft die
 > Kette durch: Ingestion, Preprocessing, Matrix-Subtraktion, MCR-ALS, Marker-Bibliothek,
 > Identifikation, Degradations-Index, Pass als JSON/HTML/PDF und eine FastAPI-Schnittstelle.
-> 877 Tests laufen grün. Was die Kette auf dem eigenen Benchmark tatsächlich leistet — und wo sie
+> 905 Tests laufen grün. Was die Kette auf dem eigenen Benchmark tatsächlich leistet — und wo sie
 > ausdrücklich an ihre Grenzen kommt — steht gemessen in [Abschnitt 6](#6-was-die-kette-leistet-und-wo-sie-aufhört).
 > Offen bleibt bewusst nur MS2.4 (PARAFAC2-Mehrlaufauswertung), von Anfang an als optional geplant.
 
@@ -136,7 +136,8 @@ src/pyrecycle_analytics/
 ├── validation/                  Bewertungs-Harness: ungarische Zuordnung, Kennzahlen,
 │                                triviale Vergleichsbasis
 ├── matrix/
-│   └── polyolefin.py            Homologenreihen-Modell und subtract_polymer_matrix
+│   ├── polyolefin.py            Homologenreihen-Modell und subtract_polymer_matrix
+│   └── backbone.py              PE/PP-Entmischung des Kamms gegen Virgin-Referenzen
 ├── deconvolution/
 │   ├── windows.py               Fensterbildung auf TIC + kanalweiser Aktivität
 │   ├── rank.py                  Parallelanalyse, EFA, Malinowski-IND, Konsens + Warnung
@@ -163,7 +164,7 @@ streamlit_app.py                 Oberfläche: Upload, Sichtung, Vorverarbeitung,
 tests/
 ├── synthetic_data.py            SyntheticPyrogramGenerator (TDD-Basis)
 ├── reference_spectra.py         EI-Spektren und Retentionsanker der Marker
-└── test_*.py                    877 Tests
+└── test_*.py                    905 Tests
 ```
 
 ---
@@ -173,7 +174,7 @@ tests/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[all]'         # oder gezielt: io, db, api, report, ui, dev
-pytest                          # 877 Tests, ca. 7 min
+pytest                          # 905 Tests, ca. 7 min
 streamlit run streamlit_app.py
 ```
 
@@ -410,14 +411,65 @@ Drei Dinge sind daran abzulesen:
    nicht zugeordnetes Signal ausgewiesen und **nicht** auf die erkannten Polymere verteilt wird.
    Eine Verteilung würde jede Zahl proportional zu dem aufblähen, was die Methode nicht erklären
    konnte — das wäre die unehrlichere Darstellung.
-2. **PE und PP in derselben Probe sind die eigentliche Schwäche.** Beide liefern denselben
-   Alkan/Alken-Kamm; die Trennung läuft allein über den Verzweigungsindex, der einen Mischkamm zu
-   einem einzigen Polymer erklärt. Auf `pcr_mixed_polyolefin` (PP 31 % wahr) landet PP bei 5,5 %
-   und ist als `indicative` gekennzeichnet. In der reinen Probe (`virgin_pp`) ist die Zuordnung
-   korrekt. Eine echte Ko-Quantifizierung im Kamm ist offen.
+2. **PE und PP im gemeinsamen Kamm — gelöst, aber nur mit Referenzen.** Beide liefern denselben
+   Alkan/Alken-Kamm. Der Verzweigungsindex allein erklärt einen Mischkamm zu einem einzigen
+   Polymer; auf `pcr_mixed_polyolefin` landete PP dadurch bei 11 % des Polyolefins gegen 34 %
+   Wahrheit. Mit zwei bis drei Virgin-Referenzläufen wird der Kamm spektral entmischt (siehe
+   unten), und PP steht bei 36,2 %. Ohne Referenzen bleibt das alte Verhalten, und der Pass sagt
+   ausdrücklich, dass ein Blend als eine mittlere Sorte gelesen wird.
 3. **Die Sortenangabe bei PE ist ein Hinweis, kein Befund.** Auf `pcr_ps_with_traces` meldet der
    Pass PE-LD, wahr ist PE-HD — der Anteil (7,1 % gegen 6,8 % wahr) stimmt, die Sorte nicht. Der
    Pass markiert das entsprechend.
+
+### Die Aufteilung des Polyolefin-Kamms
+
+PE und PP eluieren als derselbe regelmäßige Kamm; getrennt werden sie nicht über die
+Retentionszeit, sondern über das Spektrum. Propylen-Einheiten setzen an jedes dritte
+Kohlenstoffatom eine Methylgruppe, weshalb PP-Pyrolysat weit stärker in die `14k`-Serie
+(m/z 56, 70, 84) zerfällt als jedes Polyethylen.
+
+Zwei Wege wurden gegen die bekannten Mischungen gemessen:
+
+| Verfahren | reines HDPE | reines PP | Mischung (wahr 34,4 %) |
+|---|---|---|---|
+| Fragmentserien-Masken (ohne Referenzen) | 10,0 % PP | 35,0 % PP | 20,1 % |
+| **Kammspektren aus Virgin-Referenzen** | **0,0 %** | **100,0 %** | **36,1 %** |
+
+Synthetische Masken sind unbrauchbar: echte aliphatische Spektren verteilen ihre Intensität über
+weit mehr Kanäle als die idealisierte Serie. **Die Aufteilung ist damit eine Kalibrierung, keine
+Algorithmus-Einstellung** — ohne Virgin-Referenzläufe derselben Materialien unter derselben Methode
+wird sie gar nicht erst versucht, statt eine Division zu erfinden.
+
+```python
+from pyrecycle_analytics.matrix import BackboneEndmembers
+
+endmembers = BackboneEndmembers.from_references({
+    PolymerClass.PE_HD: read_pyrogram("Virgin_HDPE.CDF"),
+    PolymerClass.PE_LD: read_pyrogram("Virgin_LDPE.CDF"),
+    PolymerClass.PP:    read_pyrogram("Virgin_PP.CDF"),
+})
+result = analyse_pyrogram(cube, library, backbone_endmembers=endmembers)
+```
+
+Am fertigen Pass, PP-Anteil am Polyolefin:
+
+| Rezeptur | Einwaage | ohne Referenzen | mit Referenzen |
+|---|---|---|---|
+| `pcr_mixed_polyolefin` | 34,4 % | 11,3 % | **36,2 %** |
+| `trace_pet_in_polyolefin` | 5,0 % | 0,1 % | **5,8 %** |
+
+Drei Einschränkungen, alle gemessen und als Test festgehalten:
+
+* **HD gegen LD bleibt ungelöst.** Der Kosinus zwischen den beiden PE-Kammspektren ist 0,9990 —
+  diese Richtung trägt praktisch keine unabhängige Information. Beide werden zu einer Fraktion
+  zusammengefasst und die Sorte als Hinweis gekennzeichnet, statt zwei Prozentzahlen zu drucken,
+  die eine Rundungsdifferenz als Messung ausgeben würden.
+* **Das Messfenster muss den Kamm ausfahren.** Der PE-Kamm reicht zu hohen Kettenlängen, das
+  PP-Pyrolysat sammelt sich bei niedrigen. Ein Ofenprogramm, das bei C20 endet, verschiebt die
+  Aufteilung um +9,6 Punkte zu PP; bei C6–C34 sind es +2,2 Punkte.
+* **Der Polyolefin-*Gesamtanteil* bleibt zu niedrig** (46 % gegen 92 % Flächenanteil). Das ist ein
+  anderer Hebel: das Kammmodell erklärt nur rund die Hälfte des Signals. Die Aufteilung korrigiert
+  das Verhältnis innerhalb des Kamms, nicht seine Größe.
 
 ### Die Verankerung der Retentionsskala
 
@@ -440,7 +492,7 @@ pytest --cov=src/pyrecycle_analytics --cov=data_schemas
 ruff check . && mypy        # Lint und Typprüfung: sauber
 ```
 
-877 Tests. Sie prüfen drei Ebenen:
+905 Tests. Sie prüfen drei Ebenen:
 
 * **Mathematischer Vertrag** — exakte Bilinearität, Flächen­normierung der EMG über den gesamten
   Tailing-Bereich, L1-normierte Spektren, prozessübergreifende Reproduzierbarkeit,
@@ -480,9 +532,10 @@ Voraussetzung dafür steht im Generator bereit.
 
 **Offene Punkte, nach Wirkung sortiert.**
 
-1. **PE/PP-Ko-Quantifizierung im gemeinsamen Kamm** — der größte Einzelfehler des Passes
-   (siehe Abschnitt 6). Ein Ansatz wäre, den Kamm in zwei Reihen mit eigenen Amplituden zu
-   zerlegen, statt ihn über einen skalaren Verzweigungsindex einem Polymer zuzuschlagen.
+1. **Vollständigkeit des Kammmodells** — der größte verbleibende Einzelfehler. Das Modell erklärt
+   rund 46 % des Signals, wo die Polyolefine 92 % der Fläche stellen; der Rest landet in
+   „nicht zugeordnet". Die PE/PP-Aufteilung ist damit im Verhältnis richtig, aber im Betrag zu
+   klein.
 2. **Nachweisgrenze unter 0,05 % Signalanteil** — betrifft PET in stark polyolefindominierten
    Rezyklaten und die meisten Additivmarker. Zielionen-gestützte Fenster statt TIC-gestützter
    wären der nächste Hebel.
